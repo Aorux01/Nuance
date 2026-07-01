@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -101,7 +102,10 @@ def run_filters(
     if ffmpeg is None:
         raise FFmpegNotFoundError("ffmpeg is not available on PATH.")
 
-    command = [ffmpeg, "-y", "-hide_banner", "-i", str(source)]
+    # -nostdin stops FFmpeg from ever reading the terminal. Without it, a
+    # windowed executable (no console) gives FFmpeg an invalid stdin handle and
+    # it can block forever, leaving the export stuck at 0%.
+    command = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(source)]
 
     for extra in extra_inputs or []:
         command += ["-i", extra]
@@ -121,17 +125,33 @@ def run_filters(
 
     process = subprocess.Popen(
         command,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         creationflags=_NO_WINDOW,
     )
 
+    # Drain stderr on a background thread. FFmpeg writes a lot to stderr; if we
+    # only read stdout (the progress pipe) its stderr buffer can fill up and
+    # deadlock the process, which is the other way an export hangs at 0%.
+    stderr_chunks: List[str] = []
+
+    def drain_stderr() -> None:
+        if process.stderr is not None:
+            for line in process.stderr:
+                stderr_chunks.append(line)
+
+    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+    stderr_thread.start()
+
     _read_progress(process, progress_callback, total_duration)
 
-    _, stderr = process.communicate()
+    process.wait()
+    stderr_thread.join()
     if process.returncode != 0:
-        raise FFmpegError(stderr.strip() or "FFmpeg failed to process the file.")
+        message = "".join(stderr_chunks).strip()
+        raise FFmpegError(message or "FFmpeg failed to process the file.")
 
 
 def _read_progress(
