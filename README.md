@@ -73,6 +73,10 @@ FFmpeg is not bundled, so the machine running the app still needs `ffmpeg` and
 3. Optionally edit the title, artist, album and cover art.
 4. Click "Export MP3" and choose where to save the result.
 
+## Note
+
+> Some errors encountered during software development were fixed with the help of Artificial Intelligence (AI).
+
 ## Presets at a glance
 
 | Preset            | What it does                                        |
