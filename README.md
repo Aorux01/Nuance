@@ -10,17 +10,26 @@ and cover, then export. Everything runs locally on your machine, with no
 internet connection, no accounts and no file size limits.
 
 It is built for the sound trends people actually make and share: Sped Up,
-Nightcore, Slowed + Reverb, Chopped & Screwed, Phonk and Lo-Fi.
+Nightcore, Slowed + Reverb, Chopped & Screwed, Phonk, Lo-Fi and Energy Boost.
 
 ## Features
 
 - One-click presets: Sped Up, Nightcore, Slowed + Reverb, Chopped & Screwed,
-  Phonk, Lo-Fi.
+  Phonk, Lo-Fi, Energy Boost.
 - Manual controls for speed, pitch, bass boost, reverb and loop count.
 - Optional "keep pitch" mode to change tempo without changing pitch.
+- Muffled slider to roll off the high frequencies for a lo-fi, telephone tone.
+- Bitcrush slider for a crunchy, retro console sound.
 - Reverse the whole track.
-- Background textures (vinyl crackle, cassette hiss) mixed under the music.
-- Metadata editor for title, artist, album and cover art (ID3 tags).
+- 8D auto-pan slider for the circling "8D audio" effect.
+- Vinyl crackle and cassette hiss textures, each with its own intensity slider.
+- Master section: loudness normalisation, punch (compression + limiter),
+  brightness, stereo width and fade in/out - the "energy boosted" sound.
+- Preview: render a short excerpt with the current settings and play it back,
+  with a "find the drop" button that jumps to the track's loudest passage.
+- Save your own presets: name the current settings and reload them any time.
+- Metadata editor for title, artist, album and cover art (ID3 tags), including
+  removing an existing cover.
 - 100% local: no servers, no uploads, no ads.
 
 ## Requirements
@@ -88,6 +97,13 @@ FFmpeg is not bundled, so the machine running the app still needs `ffmpeg` and
 | Chopped & Screwed | Heavily slowed and pitched down.                    |
 | Phonk             | Slightly slowed with a strong sub-bass boost.       |
 | Lo-Fi             | Slightly slowed, soft reverb and vinyl texture.     |
+| Energy Boost      | Slight speed-up, brighter, wider, compressed and loud. |
+
+You can also save your own presets: dial in the settings you like, type a name
+under the preset dropdown and click **Save**. They appear at the bottom of the
+dropdown and can be removed with **Delete**. They are stored in a
+`user_presets.json` file in your OS config folder (`%APPDATA%\Nuance` on
+Windows, `~/.config/Nuance` elsewhere).
 
 ## Project layout
 
@@ -98,13 +114,25 @@ nuance/
     ffmpeg.py            FFmpeg and ffprobe wrapper.
     effects.py           Presets and audio filter chains.
     textures.py          Synthesised background textures.
+    highlights.py        Finds the track's loudest passage (the drop).
+    userpresets.py       Load, save and delete the user's own presets.
     metadata.py          ID3 tag and cover art editor.
-    processor.py         Ties effects and metadata into one export.
+    processor.py         Ties effects and metadata into one export; previews.
   ui/
     app.py               The main window and all controls.
     theme.py             Colors and shared styling.
     icon.ico             Application and window icon.
+tests/                   pytest suite for the audio core.
 ```
+
+## Running the tests
+
+```
+pip install pytest
+python -m pytest
+```
+
+Tests that need FFmpeg are skipped automatically when it is not on PATH.
 
 ## License
 

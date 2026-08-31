@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 # On Windows, prevent a console window from flashing for each subprocess call.
-_NO_WINDOW = 0x08000000 if hasattr(subprocess, "STARTUPINFO") else 0
+# CREATE_NO_WINDOW only exists in subprocess on Windows; elsewhere it is 0.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class FFmpegNotFoundError(RuntimeError):
@@ -83,6 +84,37 @@ def probe(path: Path) -> AudioInfo:
     )
 
 
+def decode_mono_pcm(path: Path, sample_rate: int = 8000) -> bytes:
+    """Decode a file to raw mono 32-bit float PCM at a low sample rate.
+
+    Used for quick analysis (energy envelopes, drop detection), not playback,
+    so a low rate keeps it fast and small. Returns the raw little-endian bytes;
+    the caller turns them into a numpy array.
+    """
+    ffmpeg = find_binary("ffmpeg")
+    if ffmpeg is None:
+        raise FFmpegNotFoundError("ffmpeg is not available on PATH.")
+
+    command = [
+        ffmpeg, "-v", "quiet", "-nostdin",
+        "-i", str(path),
+        "-ac", "1",
+        "-ar", str(sample_rate),
+        "-f", "f32le",
+        "-",
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        creationflags=_NO_WINDOW,
+    )
+    if result.returncode != 0:
+        raise FFmpegError(
+            result.stderr.decode(errors="replace").strip() or "ffmpeg decode failed."
+        )
+    return result.stdout
+
+
 def run_filters(
     source: Path,
     destination: Path,
@@ -92,11 +124,17 @@ def run_filters(
     filter_complex: Optional[str] = None,
     progress_callback: Optional[Callable[[float], None]] = None,
     total_duration: float = 0.0,
+    input_seek: float = 0.0,
+    input_duration: float = 0.0,
 ) -> None:
     """Run FFmpeg with a filter chain and write the result to destination.
 
     When filter_complex is provided it takes precedence over audio_filters,
     which allows mixing extra inputs such as texture loops.
+
+    input_seek and input_duration, when > 0, trim the source before filtering
+    (a -ss / -t pair on the first input) so only an excerpt is processed. This
+    is what the preview uses to render a short clip quickly.
     """
     ffmpeg = find_binary("ffmpeg")
     if ffmpeg is None:
@@ -105,7 +143,15 @@ def run_filters(
     # -nostdin stops FFmpeg from ever reading the terminal. Without it, a
     # windowed executable (no console) gives FFmpeg an invalid stdin handle and
     # it can block forever, leaving the export stuck at 0%.
-    command = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(source)]
+    command = [ffmpeg, "-y", "-hide_banner", "-nostdin"]
+
+    # -ss before -i seeks fast; -t before -i caps how much is read. Both only
+    # apply to the source, not to the looped texture inputs that follow.
+    if input_seek > 0:
+        command += ["-ss", f"{input_seek:.3f}"]
+    if input_duration > 0:
+        command += ["-t", f"{input_duration:.3f}"]
+    command += ["-i", str(source)]
 
     for extra in extra_inputs or []:
         command += ["-i", extra]

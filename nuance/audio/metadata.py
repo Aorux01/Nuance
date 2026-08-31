@@ -11,13 +11,19 @@ from mutagen.mp3 import MP3
 
 @dataclass
 class Tags:
-    """The subset of ID3 fields the editor exposes to the user."""
+    """The subset of ID3 fields the editor exposes to the user.
+
+    cover_data is None when the cover should be left untouched and holds image
+    bytes when a new cover should be written. Set remove_cover to strip an
+    existing cover without providing a replacement.
+    """
 
     title: str = ""
     artist: str = ""
     album: str = ""
     cover_data: Optional[bytes] = None
     cover_mime: str = ""
+    remove_cover: bool = False
 
 
 def read_tags(path: Path) -> Tags:
@@ -80,6 +86,8 @@ def write_tags(path: Path, tags: Tags) -> None:
                 data=tags.cover_data,
             )
         )
+    elif tags.remove_cover:
+        id3.delall("APIC")
 
     id3.save(str(path), v2_version=3)
 

@@ -1,7 +1,7 @@
 """Build FFmpeg audio filter chains from a set of user-facing settings."""
 
-from dataclasses import dataclass, field, replace
-from typing import Dict, List
+from dataclasses import asdict, dataclass, field, fields, replace
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -17,8 +17,24 @@ class EffectSettings:
     reverb: reverb amount from 0.0 (dry) to 1.0 (very wet).
     reverse: play the audio backwards.
     loop_count: how many times the whole track repeats (1 = play once).
-    texture: name of a background texture to mix in, or "none".
-    texture_gain_db: volume of the texture layer relative to the music.
+    muffled_hz: low-pass cutoff frequency. MAX_HZ means no muffling; lower
+        values give a more muffled, telephone-like sound.
+    bitcrush_bits: bit depth for a retro, crunchy console sound. CLEAN_BITS
+        means no effect; lower values crush the resolution harder.
+    vinyl: vinyl crackle texture amount from 0.0 (off) to 1.0 (full).
+    cassette: cassette hiss texture amount from 0.0 (off) to 1.0 (full).
+    brightness_db: high shelf gain in dB for an airy, "HD" top end. 0 = off.
+    stereo_width: stereo image scaling. 1.0 = untouched, above widens, below
+        narrows (0.0 = mono).
+    punch: 0..1 amount of glue compression plus a brick-wall limiter, for the
+        dense, loud, "energy boosted" feel. 0 = off.
+    loudness_lufs: integrated loudness target for a final loudnorm pass, or
+        NO_LOUDNORM to skip normalisation. Streaming sits near -14; the loud
+        remix channels push to -9 or higher.
+    fade_in_sec: linear fade-in length in seconds at the start. 0 = off.
+    fade_out_sec: linear fade-out length in seconds at the end. 0 = off.
+    autopan: 0..1 amount of "8D audio" auto-panning: the sound circles between
+        the ears. 0 = off.
     """
 
     speed: float = 1.0
@@ -28,8 +44,35 @@ class EffectSettings:
     reverb: float = 0.0
     reverse: bool = False
     loop_count: int = 1
-    texture: str = "none"
-    texture_gain_db: float = -12.0
+    muffled_hz: float = 20000.0
+    bitcrush_bits: float = 16.0
+    vinyl: float = 0.0
+    cassette: float = 0.0
+    brightness_db: float = 0.0
+    stereo_width: float = 1.0
+    punch: float = 0.0
+    loudness_lufs: float = 0.0
+    fade_in_sec: float = 0.0
+    fade_out_sec: float = 0.0
+    autopan: float = 0.0
+
+
+# Frequency at or above which the muffled low-pass does nothing.
+MAX_HZ = 20000.0
+# Bit depth at or above which the bitcrusher does nothing.
+CLEAN_BITS = 16.0
+# loudness_lufs value that means "do not run loudnorm at all". 0 LUFS is not a
+# meaningful target (it would be far beyond full scale), so it is a safe sentinel.
+NO_LOUDNORM = 0.0
+
+
+def _resample(sample_rate: int) -> str:
+    """Resample back to sample_rate with the higher-quality soxr resampler.
+
+    The default swresample engine is fine, but slowed and sped-up tracks are
+    the whole point of this app, so the modest extra CPU for soxr is worth it.
+    """
+    return f"aresample={sample_rate}:resampler=soxr"
 
 
 # Named presets that map to the internet audio trends the app targets.
@@ -40,8 +83,13 @@ PRESETS: Dict[str, EffectSettings] = {
     "Slowed + Reverb": EffectSettings(speed=0.85, reverb=0.6),
     "Chopped & Screwed": EffectSettings(speed=0.75, pitch_semitones=-2.0, reverb=0.35),
     "Phonk": EffectSettings(speed=0.92, bass_boost_db=8.0, reverb=0.25),
-    "Lo-Fi": EffectSettings(
-        speed=0.95, reverb=0.2, texture="vinyl", texture_gain_db=-14.0
+    "Lo-Fi": EffectSettings(speed=0.95, reverb=0.2, vinyl=0.5),
+    "Energy Boost": EffectSettings(
+        speed=1.08,
+        brightness_db=3.5,
+        stereo_width=1.4,
+        punch=0.7,
+        loudness_lufs=-9.0,
     ),
 }
 
@@ -54,6 +102,20 @@ def preset_names() -> List[str]:
 def get_preset(name: str) -> EffectSettings:
     """Return a fresh copy of a preset so callers can mutate it freely."""
     return replace(PRESETS.get(name, EffectSettings()))
+
+
+def settings_to_dict(settings: EffectSettings) -> Dict[str, Any]:
+    """Plain dict of a settings object, ready for JSON."""
+    return asdict(settings)
+
+
+def settings_from_dict(data: Dict[str, Any]) -> EffectSettings:
+    """Build a settings object from a dict, ignoring unknown keys and keeping
+    defaults for anything missing. Tolerant so an older or hand-edited file
+    still loads."""
+    known = {f.name for f in fields(EffectSettings)}
+    clean = {k: v for k, v in data.items() if k in known}
+    return replace(EffectSettings(), **clean)
 
 
 def build_atempo_chain(speed: float) -> List[str]:
@@ -77,34 +139,50 @@ def build_atempo_chain(speed: float) -> List[str]:
     return filters
 
 
-def build_filters(settings: EffectSettings, sample_rate: int) -> List[str]:
+def build_filters(
+    settings: EffectSettings,
+    sample_rate: int,
+    output_duration: float = 0.0,
+) -> List[str]:
     """Translate settings into an ordered list of FFmpeg audio filters.
 
     This covers everything except background textures, which need a second
     input and are handled through a filter_complex graph elsewhere.
+
+    output_duration, when > 0, is the expected length of the processed audio
+    in seconds. It is only needed to place a fade-out; without it the fade-out
+    is skipped rather than guessed wrong.
     """
     filters: List[str] = []
 
     if settings.reverse:
         filters.append("areverse")
 
-    # Speed and pitch. When keep_pitch is set we change tempo only (atempo).
-    # Otherwise we resample so pitch rises and falls with speed, the classic
-    # "sped up" / "slowed" sound.
-    if settings.keep_pitch:
-        filters += build_atempo_chain(settings.speed)
-    elif abs(settings.speed - 1.0) >= 1e-3:
-        new_rate = int(sample_rate * settings.speed)
-        filters.append(f"asetrate={new_rate}")
-        filters.append(f"aresample={sample_rate}")
+    pitch_ratio = 2 ** (settings.pitch_semitones / 12.0)
+    has_pitch = abs(settings.pitch_semitones) >= 1e-3
+    has_speed = abs(settings.speed - 1.0) >= 1e-3
 
-    # Extra musical pitch shift on top of the speed change.
-    if abs(settings.pitch_semitones) >= 1e-3:
-        ratio = 2 ** (settings.pitch_semitones / 12.0)
-        shifted = int(sample_rate * ratio)
-        filters.append(f"asetrate={shifted}")
-        filters.append(f"aresample={sample_rate}")
-        filters += build_atempo_chain(1.0 / ratio)
+    # Speed and pitch. When keep_pitch is set we change tempo only (atempo) and
+    # apply any musical pitch shift separately. Otherwise pitch rides with speed
+    # (the classic "sped up" / "slowed" sound) so both fold into a single
+    # asetrate step, avoiding a second resample pass and the quality it costs.
+    if settings.keep_pitch:
+        if has_speed:
+            filters += build_atempo_chain(settings.speed)
+        if has_pitch:
+            shifted = int(sample_rate * pitch_ratio)
+            filters.append(f"asetrate={shifted}")
+            filters.append(_resample(sample_rate))
+            filters += build_atempo_chain(1.0 / pitch_ratio)
+    else:
+        combined = settings.speed * (pitch_ratio if has_pitch else 1.0)
+        if abs(combined - 1.0) >= 1e-3:
+            filters.append(f"asetrate={int(sample_rate * combined)}")
+            filters.append(_resample(sample_rate))
+            # Undo only the extra tempo change the musical pitch shift added, so
+            # speed still governs the final tempo.
+            if has_pitch:
+                filters += build_atempo_chain(1.0 / pitch_ratio)
 
     if abs(settings.bass_boost_db) >= 1e-3:
         filters.append(f"bass=g={settings.bass_boost_db:.2f}:f=90:width_type=q:w=0.7")
@@ -112,11 +190,83 @@ def build_filters(settings: EffectSettings, sample_rate: int) -> List[str]:
     if settings.reverb > 1e-3:
         filters.append(_build_reverb(settings.reverb))
 
+    if settings.autopan > 1e-3:
+        filters.append(_build_autopan(settings.autopan))
+
+    if settings.muffled_hz < MAX_HZ:
+        # A low-pass cutoff throws away the high frequencies for a muffled,
+        # telephone-like tone. The lower the cutoff, the more muffled it is.
+        cutoff = max(500.0, settings.muffled_hz)
+        filters.append(f"lowpass=f={cutoff:.0f}")
+
+    if settings.bitcrush_bits < CLEAN_BITS:
+        # Reduce bit depth and sample resolution for a crunchy retro console
+        # sound. Fewer bits means a harsher, more lo-fi result.
+        bits = max(1.0, settings.bitcrush_bits)
+        filters.append(
+            f"acrusher=bits={bits:.1f}:mode=lin:mix=1:samples=4:aa=1"
+        )
+
     if settings.loop_count > 1:
         # aloop counts in samples; -1 loops forever, so we set an explicit size.
         filters.append(f"aloop=loop={settings.loop_count - 1}:size=2147483647")
 
+    # Mastering-style chain: tonal shaping, then stereo width, then glue
+    # compression and a brick-wall limiter, then loudness, then fades. Order
+    # matters here the way it does on a mix bus, so it lives in one place.
+    filters += _build_master_chain(settings, output_duration)
+
     return filters
+
+
+def _build_master_chain(
+    settings: EffectSettings, output_duration: float = 0.0
+) -> List[str]:
+    """Return the loudness / punch / width / brightness / fade filters, in order.
+
+    This is what turns a plain speed-up into the dense, loud, "energy boosted"
+    sound of the remix channels. Every stage is optional and off by default.
+    output_duration is only used to position the fade-out.
+    """
+    chain: List[str] = []
+
+    # 1. Brightness: a high shelf that opens up the top end for an airy feel.
+    if abs(settings.brightness_db) >= 1e-3:
+        gain = max(-12.0, min(settings.brightness_db, 12.0))
+        chain.append(f"treble=g={gain:.2f}:f=8000:width_type=q:w=0.7")
+
+    # 2. Stereo width. extrastereo=m=1 is a no-op; higher widens, 0 collapses
+    #    to mono. Map width 1.0 -> m=1.0 and scale from there.
+    if abs(settings.stereo_width - 1.0) >= 1e-3:
+        m = max(0.0, min(settings.stereo_width, 4.0))
+        chain.append(f"extrastereo=m={m:.3f}:c=false")
+
+    # 3. Punch: glue compression then a limiter. One knob drives both so a
+    #    single slider goes from "a touch tighter" to "wall of sound".
+    if settings.punch > 1e-3:
+        amount = max(0.0, min(settings.punch, 1.0))
+        threshold = -12.0 - 12.0 * amount   # -12 dB down to -24 dB
+        ratio = 2.0 + 4.0 * amount          # 2:1 up to 6:1
+        makeup = 1.0 + 3.0 * amount         # gain to bring the level back up
+        chain.append(
+            f"acompressor=threshold={threshold:.1f}dB:ratio={ratio:.1f}:"
+            f"attack=5:release=120:makeup={makeup:.2f}"
+        )
+        chain.append("alimiter=limit=0.97:level=false")
+
+    # 4. Loudness normalisation, always the last level-changing stage.
+    if settings.loudness_lufs != NO_LOUDNORM:
+        target = max(-30.0, min(settings.loudness_lufs, -5.0))
+        chain.append(f"loudnorm=I={target:.1f}:TP=-1.0:LRA=11")
+
+    # 5. Fades sit right at the ends, after everything else.
+    if settings.fade_in_sec > 1e-3:
+        chain.append(f"afade=t=in:st=0:d={settings.fade_in_sec:.2f}")
+    if settings.fade_out_sec > 1e-3 and output_duration > settings.fade_out_sec:
+        start = output_duration - settings.fade_out_sec
+        chain.append(f"afade=t=out:st={start:.3f}:d={settings.fade_out_sec:.2f}")
+
+    return chain
 
 
 def _build_reverb(amount: float) -> str:
@@ -136,12 +286,31 @@ def _build_reverb(amount: float) -> str:
     return f"aecho={in_gain:.3f}:{out_gain:.3f}:{delays}:{decays}"
 
 
+def _build_autopan(amount: float) -> str:
+    """Return an apulsator filter for the circling "8D audio" effect.
+
+    amount 0..1 raises how far the sound swings toward each ear (width) and,
+    gently, how fast it circles (hz). Low values give a subtle drift, high
+    values the full head-spinning sweep.
+    """
+    amount = max(0.0, min(amount, 1.0))
+    width = 0.5 + 1.5 * amount   # 0.5 (narrow) up to 2.0 (hard L/R)
+    hz = 0.08 + 0.12 * amount    # ~13 s per lap down to ~5 s per lap
+    return f"apulsator=mode=sine:hz={hz:.3f}:width={width:.3f}"
+
+
+# The intensity (0..1) of each background texture, read from the settings.
+def texture_amounts(settings: EffectSettings) -> Dict[str, float]:
+    """Return the requested intensity for each named texture layer."""
+    return {"vinyl": settings.vinyl, "cassette": settings.cassette}
+
+
 @dataclass
 class ChainPlan:
     """A resolved plan describing how FFmpeg should be invoked.
 
-    Either simple audio_filters are used, or a filter_complex string when a
-    texture layer must be mixed in from a second input.
+    Either simple audio_filters are used, or a filter_complex string when one
+    or more texture layers must be mixed in from extra inputs.
     """
 
     audio_filters: List[str] = field(default_factory=list)
@@ -152,26 +321,56 @@ class ChainPlan:
 def build_plan(
     settings: EffectSettings,
     sample_rate: int,
-    texture_path: str = "",
+    texture_paths: Dict[str, str] = None,
+    output_duration: float = 0.0,
 ) -> ChainPlan:
-    """Produce a ChainPlan, folding in a texture layer when requested."""
-    filters = build_filters(settings, sample_rate)
+    """Produce a ChainPlan, folding in any active texture layers.
 
-    if settings.texture == "none" or not texture_path:
+    texture_paths maps a texture name to its wav path. Only textures whose
+    intensity is above zero and that have a path are mixed in. output_duration
+    is passed through to build_filters so a fade-out can be positioned.
+    """
+    filters = build_filters(settings, sample_rate, output_duration)
+    texture_paths = texture_paths or {}
+
+    active = [
+        (name, texture_paths[name], amount)
+        for name, amount in texture_amounts(settings).items()
+        if amount > 1e-3 and texture_paths.get(name)
+    ]
+
+    if not active:
         return ChainPlan(audio_filters=filters)
 
-    # Chain the music filters on input 0, loop the texture on input 1, set its
-    # volume, then mix both down to a single [out] stream.
+    # Chain the music filters on input 0, then loop each active texture on its
+    # own input, scale it by intensity, and mix everything down to [out].
     music_chain = ",".join(filters) if filters else "anull"
-    graph = (
-        f"[0:a]{music_chain}[music];"
-        f"[1:a]aloop=loop=-1:size=2147483647,"
-        f"volume={_db_to_linear(settings.texture_gain_db):.4f}[tex];"
-        f"[music][tex]amix=inputs=2:duration=first:dropout_transition=0[out]"
+    parts = [f"[0:a]{music_chain}[music]"]
+    extra_inputs: List[str] = []
+    labels = ["[music]"]
+
+    for index, (_, path, amount) in enumerate(active, start=1):
+        extra_inputs.append(path)
+        label = f"[tex{index}]"
+        parts.append(
+            f"[{index}:a]aloop=loop=-1:size=2147483647,"
+            f"volume={_texture_volume(amount):.4f}{label}"
+        )
+        labels.append(label)
+
+    joined = "".join(labels)
+    parts.append(
+        f"{joined}amix=inputs={len(labels)}:duration=first:"
+        f"dropout_transition=0[out]"
     )
-    return ChainPlan(filter_complex=graph, extra_inputs=[texture_path])
+    return ChainPlan(filter_complex=";".join(parts), extra_inputs=extra_inputs)
 
 
-def _db_to_linear(db: float) -> float:
-    """Convert a decibel gain to a linear volume multiplier."""
-    return 10 ** (db / 20.0)
+def _texture_volume(amount: float) -> float:
+    """Map a 0..1 texture intensity to a sensible linear mixing volume.
+
+    Full intensity sits a little below the music so textures colour the sound
+    without burying it.
+    """
+    amount = max(0.0, min(amount, 1.0))
+    return 0.5 * amount
