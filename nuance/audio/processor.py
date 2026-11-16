@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import astuple, replace
 from pathlib import Path
 
-from nuance.audio import effects, ffmpeg, metadata, textures
+from nuance.audio import effects, ffmpeg, highlights, metadata, textures
 from nuance.audio.effects import EffectSettings
 
 # The preview clip is capped so a stray slider cannot ask for a 10-minute render.
@@ -18,6 +18,9 @@ PREVIEW_MAX_SEC = 30.0
 # Rendered previews older than this are deleted so the temp folder cannot grow
 # without bound.
 PREVIEW_MAX_AGE_SEC = 3 * 24 * 3600
+# Part of every preview's cache key. Bump it when how a preview is rendered
+# changes, so clips cached by an older version are not served as if current.
+_PREVIEW_VERSION = "2"
 
 
 def process(
@@ -42,7 +45,7 @@ def process(
     info = ffmpeg.probe(source)
 
     estimated = _estimate_duration(info.duration, settings)
-    plan = _make_plan(settings, info.sample_rate, estimated)
+    plan = _make_plan(settings, info.sample_rate, estimated, source)
 
     # Containers mutagen can't tag (mka, mp4, ...) get their tags at mux time.
     mux_metadata = None
@@ -139,9 +142,18 @@ def _write_cover_file(tags: metadata.Tags) -> Path | None:
 
 
 def _make_plan(
-    settings: EffectSettings, sample_rate: int, output_duration: float
+    settings: EffectSettings,
+    sample_rate: int,
+    output_duration: float,
+    source: Path,
+    seek: float = 0.0,
+    bounded: bool = False,
 ) -> effects.ChainPlan:
-    """Resolve textures and the reverb impulse response, then build the plan."""
+    """Resolve textures, the reverb impulse response and accents, then build the plan.
+
+    seek and bounded describe an excerpt: it starts `seek` seconds into the
+    source and is `output_duration` long. Without them the whole track is meant.
+    """
     settings = effects.apply_epic(settings)  # so the reverb check sees the macro
     reverb_ir = textures.get_reverb_ir_path() if settings.reverb > 1e-3 else None
     return effects.build_plan(
@@ -150,7 +162,58 @@ def _make_plan(
         _resolve_textures(settings),
         output_duration=output_duration,
         reverb_ir=reverb_ir,
+        accents=_accents(
+            source, settings, seek, output_duration if bounded else 0.0
+        ),
     )
+
+
+def _accents(
+    source: Path, settings: EffectSettings, seek: float = 0.0, clip_length: float = 0.0
+) -> list[effects.Accent]:
+    """Place the riser and impact on the output timeline.
+
+    The drop is found in the source, then converted to output time: shifted by
+    where the excerpt starts (`seek`) and divided by the speed. The impact lands
+    on the drop (or at the very start when the track has no clear drop); the
+    riser is built to end exactly on it, so it needs a drop. A sound that falls
+    outside the excerpt (clip_length > 0 bounds it) is left out. Reversed audio
+    has no meaningful drop, so it gets neither.
+    """
+    s = effects.apply_epic(settings)
+    wants_impact = s.impact > 1e-3
+    wants_riser = s.riser > 1e-3
+    if s.reverse or not (wants_impact or wants_riser):
+        return []
+
+    drop = highlights.find_drop(source)
+    speed = s.speed if s.speed > 0 else 1.0
+    accents: list[effects.Accent] = []
+
+    if wants_impact:
+        hit = ((drop if drop is not None else 0.0) - seek) / speed
+        in_range = hit >= -1e-3 and (clip_length <= 0 or hit < clip_length)
+        if in_range:
+            accents.append(
+                effects.Accent(
+                    textures.get_accent_path("impact"),
+                    max(hit, 0.0),
+                    effects.impact_volume(s.impact),
+                )
+            )
+
+    if wants_riser and drop is not None:
+        end = (drop - seek) / speed
+        start = end - textures.RISER_SEC
+        if end > 0 and (clip_length <= 0 or start < clip_length):
+            accents.append(
+                effects.Accent(
+                    textures.get_accent_path("riser"),
+                    start,
+                    effects.riser_volume(s.riser),
+                )
+            )
+    return accents
 
 
 def render_preview(
@@ -185,7 +248,10 @@ def render_preview(
 
     _prune_previews(out_dir)
     clip_out = _estimate_duration(length_sec, settings)
-    plan = _make_plan(settings, ffmpeg.probe(source).sample_rate, clip_out)
+    plan = _make_plan(
+        settings, ffmpeg.probe(source).sample_rate, clip_out, source,
+        seek=start_sec, bounded=True,
+    )
 
     ffmpeg.run_filters(
         source=source,
@@ -225,6 +291,7 @@ def _preview_key(
 ) -> str:
     """A short stable digest of everything that affects the preview output."""
     parts = (
+        _PREVIEW_VERSION,
         str(source.resolve()),
         f"{start_sec:.3f}",
         f"{length_sec:.3f}",
@@ -241,5 +308,6 @@ def _estimate_duration(duration: float, settings: EffectSettings) -> float:
     result = duration
     if settings.speed > 0 and abs(settings.speed - 1.0) >= 1e-3:
         result /= settings.speed
+    result += effects.reverb_tail_seconds(settings)  # the reverb rings on
     result *= max(settings.loop_count, 1)
     return result

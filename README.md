@@ -24,7 +24,14 @@ Lo-Fi, 8D Audio and Energy Boost.
   lowers the pitch and adds a big reverb, deep bass, a wide stereo image,
   punch and slow fades, all together. It stacks on top of your other
   settings, so you can dial the cinematic version in without touching
-  eight sliders.
+  eight sliders. It also brings in a riser and an impact (below).
+- **Riser** and **Impact** sliders: a synthesised tension riser that builds up
+  to the track's drop, and a cinematic hit (a falling sub-bass and a rumble)
+  right on it. Nuance finds the drop by looking for where the bass suddenly
+  comes in much harder, and shifts both to follow the speed you chose. With
+  no clear drop the impact goes at the very start and the riser is skipped.
+- The reverb now rings out **past the end** of the track instead of being
+  cut off.
 - Manual controls for speed, pitch, bass boost, reverb and loop count.
 - Convolution reverb: a synthesised hall impulse response, not a simple echo.
 - Tape wobble (wow & flutter) and chorus sliders for lo-fi and vaporwave sounds.
@@ -40,8 +47,8 @@ Lo-Fi, 8D Audio and Energy Boost.
   playhead follows the sound.
 - Preview inside the app: render a short excerpt and play it, and flip between
   the **Original** and the **Processed** version while it plays (A/B) to hear
-  exactly what the effects do. A "find the drop" button jumps to the loudest
-  passage. (In-app playback uses `ffplay`, which comes with FFmpeg.)
+  exactly what the effects do. A "find the drop" button jumps to a few seconds
+  before the drop, so you hear the build-up and the hit. (In-app playback uses `ffplay`, which comes with FFmpeg.)
 - Batch: load several files at once and apply the same settings to all of them,
   with a progress bar per file.
 - Command line: `python -m nuance remix ...` does the same without the window.
@@ -136,7 +143,7 @@ overrides the preset. Existing files are never overwritten unless you pass
 | Nightcore         | Even faster with an extra pitch lift.               |
 | Slowed + Reverb   | Slower tempo with a spacious reverb tail.           |
 | Chopped & Screwed | Heavily slowed and pitched down.                    |
-| Epic              | Cinematic: slower, lower, huge reverb, deep bass, wide and punchy. |
+| Epic              | Cinematic: slower, lower, huge reverb, deep bass, wide and punchy, with a riser and an impact. |
 | Daycore           | Slowed with the pitch kept, muffled and reverberant. |
 | Vaporwave         | Slowed and pitched down, chorus, tape wobble, reverb. |
 | Phonk             | Slightly slowed with a strong sub-bass boost.       |
@@ -161,7 +168,7 @@ nuance/
     ffmpeg.py            FFmpeg and ffprobe wrapper (audio and video output).
     effects.py           Presets and audio filter chains.
     textures.py          Synthesised textures and the reverb impulse response.
-    highlights.py        Finds the track's loudest passage (the drop).
+    highlights.py        Finds the loudest passage and the drop (bass jump).
     waveform.py          Builds the waveform image for a track.
     userpresets.py       Load, save and delete the user's own presets.
     metadata.py          Tag and cover art editor (MP3 / FLAC / ...).

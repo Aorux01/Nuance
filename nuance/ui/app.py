@@ -20,6 +20,7 @@ from nuance.audio import (
     naming,
     player,
     processor,
+    textures,
     userpresets,
     waveform,
 )
@@ -172,6 +173,10 @@ class NuanceApp:
     #   coerce    -> optional value transform, e.g. sentinel handling or rounding
     _SLIDER_SPECS = [
         dict(name="epic", attr="epic", min=0, max=1, divisions=20,
+             fmt=_fmt_amount),
+        dict(name="riser", attr="riser", min=0, max=1, divisions=20,
+             fmt=_fmt_amount),
+        dict(name="impact", attr="impact", min=0, max=1, divisions=20,
              fmt=_fmt_amount),
         dict(name="speed", attr="speed", min=0.5, max=1.6, divisions=110,
              fmt=_fmt_speed, label="{value}x"),
@@ -540,6 +545,8 @@ class NuanceApp:
                     spacing=8,
                 ),
                 self._slider_row("Epic", self.epic_slider, self.epic_value),
+                self._slider_row("Riser", self.riser_slider, self.riser_value),
+                self._slider_row("Impact", self.impact_slider, self.impact_value),
                 ft.Divider(color=theme.BORDER, height=24),
                 theme.section_title("Adjust"),
                 self._slider_row("Speed", self.speed_slider, self.speed_value),
@@ -915,8 +922,15 @@ class NuanceApp:
         self.page.update()
 
         path = self.source_path
+        start = 0.0
         try:
-            start = await asyncio.to_thread(highlights.find_hook, path)
+            drop = await asyncio.to_thread(highlights.find_drop, path)
+            if drop is not None:
+                # Start a riser's length before the drop, so the build-up and the
+                # hit both fall inside the excerpt.
+                start = max(0.0, drop - textures.RISER_SEC)
+            else:
+                start = await asyncio.to_thread(highlights.find_hook, path)
         except Exception:
             start = 0.0
 

@@ -5,11 +5,10 @@ short while as a changelog, then trimmed.
 
 ## Next
 
-- **Epic extras.** The Epic slider is a macro over the existing effects. Next:
-  let the reverb tail ring out past the end of the track (it is cut today),
-  and add a synthesised impact / sub-drop and a riser. Placing those well
-  needs build-up detection (finding where the energy climbs towards a drop),
-  which can build on `highlights.find_hook`.
+- **Better drop detection.** `find_drop` compares bass energy before and after
+  each moment, which works on clear build-and-drop tracks but has only been
+  tried on synthetic ones. Tune it on real music, and consider several drops
+  per track (a riser before each).
 - **Animated video track.** Video export currently shows a still picture. Add
   optional simple animation: waveform bars (FFmpeg's `showwaves`), a slow zoom
   or a spinning disc.
@@ -35,6 +34,9 @@ short while as a changelog, then trimmed.
 
 - **Epic** macro slider and preset: slower, lower, big reverb, deep bass, wide
   stereo, punch and slow fades from one knob.
+- **Riser and impact**: synthesised, placed on the track's drop, which is
+  found automatically; also part of Epic. The reverb now rings out past the
+  end of the track.
 - **Export quality fixes.** `loudnorm` no longer leaves lossless exports at
   192 kHz; background textures no longer lower the music by ~6 dB, and loudness
   is now measured on the mix including the textures; a cancelled or failed

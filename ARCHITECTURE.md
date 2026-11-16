@@ -24,7 +24,11 @@ nuance/
                         post-reverb, master) so build_plan can splice extra
                         inputs between them: the reverb impulse response after
                         the pre stage, background textures before the master
-                        stage. Without extra inputs it is a plain -af list.
+                        stage. Accents (the riser and impact) are one-off
+                        sounds placed at a time on the output and mixed in
+                        with the textures; the reverb is given silence to
+                        ring into (reverb_tail_seconds). apply_epic() folds
+                        the Epic macro into the individual settings first. Without extra inputs it is a plain -af list.
 
     ffmpeg.py           The only place that spawns FFmpeg / ffprobe (ffplay is
                         spawned by player.py). probe()
@@ -45,7 +49,10 @@ nuance/
                         FLAC, then mux_video() with the picture. render_preview()
                         does the same for a short excerpt, caching the output
                         file on a hash of the request so an unchanged preview is
-                        instant, and pruning old previews.
+                        instant, and pruning old previews. _accents() finds the
+                        drop and converts it to output time (shifted by the
+                        excerpt start, divided by the speed) to place the
+                        riser and impact.
 
     batch.py            plan_items() picks an output path for each file (never
                         clobbering anything); BatchRunner runs them one by one,
@@ -63,11 +70,14 @@ nuance/
                         (MKA tags are written by FFmpeg at mux time instead).
 
     textures.py         Synthesises the vinyl-crackle and cassette-hiss loops
-                        and the reverb impulse response with numpy at first use
-                        and caches them as wav files, so no audio assets need
-                        shipping.
+                        the reverb impulse response, and the riser and impact
+                        with numpy at first use and caches them as wav files,
+                        so no audio assets need shipping.
 
-    highlights.py       find_hook(): decodes the track cheaply and returns the
+    highlights.py       find_drop(): compares the bass energy after each moment
+                        with the energy before it and returns the biggest jump
+                        (None when nothing stands out); remembered per file.
+                        find_hook(): decodes the track cheaply and returns the
                         timestamp of its most intense passage (the drop),
                         weighting low-frequency energy. Used to place the
                         preview start. Falls back to one third in.

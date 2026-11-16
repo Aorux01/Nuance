@@ -10,7 +10,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from nuance.audio import ffmpeg, processor, textures
+from nuance.audio import effects, ffmpeg, processor, textures
 from nuance.audio.effects import EffectSettings
 
 pytestmark = pytest.mark.skipif(
@@ -67,19 +67,31 @@ def test_textures_do_not_make_the_track_quieter(noise_source, tmp_path):
     assert drop < 1.0
 
 
-def test_reverb_renders_at_the_same_length_and_a_sane_level(noise_source, tmp_path):
+def test_reverb_rings_out_past_the_end_and_stays_at_a_sane_level(
+    noise_source, tmp_path
+):
     dry = tmp_path / "dry.wav"
     wet = tmp_path / "wet.wav"
     processor.process(noise_source, dry, EffectSettings())
     processor.process(noise_source, wet, EffectSettings(reverb=0.6))
 
+    tail = effects.reverb_tail_seconds(EffectSettings(reverb=0.6))
+    assert tail > 1.0
     assert ffmpeg.probe(wet).duration == pytest.approx(
-        ffmpeg.probe(dry).duration, abs=0.1
+        ffmpeg.probe(dry).duration + tail, abs=0.1
     )
+    # The extra time really is the reverb ringing: quiet but not silent, and it
+    # decays towards the end.
     y = _samples(wet)
+    ring = y[int(6.2 * 44100) : int(7.0 * 44100)]
+    late = y[int(7.7 * 44100) :]
+    assert _rms_db(ring) > -75
+    assert _rms_db(late) < _rms_db(ring)
     assert np.abs(y).max() <= 1.0
-    # A convolution reverb adds energy but must stay in the same ballpark.
-    assert abs(_rms_db(y[44100:]) - _rms_db(_samples(dry)[44100:])) < 4.0
+    # A convolution reverb adds energy but must stay in the same ballpark
+    # (compared over the span where the track itself plays).
+    span = slice(44100, 6 * 44100)
+    assert abs(_rms_db(y[span]) - _rms_db(_samples(dry)[span])) < 4.0
 
 
 def test_reverb_is_aligned_with_the_dry_signal(tmp_path):

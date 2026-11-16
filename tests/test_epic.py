@@ -103,7 +103,9 @@ def test_epic_is_part_of_the_preview_cache_key(tmp_path):
 def test_duration_estimate_follows_the_slowdown():
     plain = processor._estimate_duration(100.0, EffectSettings())
     epic = processor._estimate_duration(100.0, EffectSettings(epic=1.0))
-    assert epic == pytest.approx(plain / 0.88)
+    # 12% slower, plus the tail its reverb is left to ring out into.
+    tail = effects.reverb_tail_seconds(EffectSettings(epic=1.0))
+    assert epic == pytest.approx(plain / 0.88 + tail)
 
 
 # -- the preset, the slider, the command line -----------------------------------------
@@ -144,14 +146,17 @@ def test_epic_export_is_longer_and_stays_in_range(tmp_path, make_tone):
     processor.process(src, out, replace(EffectSettings(), epic=1.0))
 
     assert ffmpeg.probe(out).sample_rate == 44100
-    assert ffmpeg.probe(out).duration == pytest.approx(4 / 0.88, abs=0.3)
+    tail = effects.reverb_tail_seconds(EffectSettings(epic=1.0))
+    assert ffmpeg.probe(out).duration == pytest.approx(4 / 0.88 + tail, abs=0.4)
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(out), "-f", "f32le", "-ac", "2", "-"],
         capture_output=True, check=True,
     ).stdout
     samples = np.frombuffer(raw, dtype="<f4")
     assert np.abs(samples).max() <= 1.0
-    # The slow fade-in and fade-out leave the very ends much quieter than the middle.
+    # The slow fade-out and the reverb's decay leave the very end much quieter
+    # than the middle. (The start is not checked: Epic also adds an impact there
+    # when the track has no clear drop.)
     n = samples.size
-    assert np.abs(samples[: n // 50]).mean() < np.abs(samples[n // 2 - n // 50 : n // 2]).mean() / 2
-    assert np.abs(samples[-n // 50 :]).mean() < np.abs(samples[n // 2 - n // 50 : n // 2]).mean() / 2
+    middle = np.abs(samples[n // 2 - n // 50 : n // 2]).mean()
+    assert np.abs(samples[-n // 50 :]).mean() < middle / 2

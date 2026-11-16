@@ -1,5 +1,6 @@
 """Build FFmpeg audio filter chains from a set of user-facing settings."""
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
@@ -43,6 +44,11 @@ class EffectSettings:
         pitch and adds a big reverb, deep bass, a wide stereo image, punch and
         slow fades, all scaled together. It stacks on top of the other settings
         (see apply_epic). 0 = off.
+    riser: 0..1 volume of a synthesised tension riser that builds up to the
+        track's drop (found automatically). Needs a detectable drop. 0 = off.
+    impact: 0..1 volume of a synthesised cinematic hit (a falling sub-bass and a
+        rumble) on the drop, or at the very start when there is no clear drop.
+        0 = off.
     """
 
     speed: float = 1.0
@@ -66,6 +72,8 @@ class EffectSettings:
     wow_flutter: float = 0.0
     chorus: float = 0.0
     epic: float = 0.0
+    riser: float = 0.0
+    impact: float = 0.0
 
 
 # Frequency at or above which the muffled low-pass does nothing.
@@ -149,9 +157,47 @@ def apply_epic(settings: EffectSettings) -> EffectSettings:
         punch=max(settings.punch, 0.55 * amount),
         brightness_db=settings.brightness_db + 2.0 * amount,
         chorus=max(settings.chorus, 0.2 * amount),
+        riser=max(settings.riser, 0.5 * amount),
+        impact=max(settings.impact, 0.6 * amount),
         fade_in_sec=max(settings.fade_in_sec, 2.0 * amount),
         fade_out_sec=max(settings.fade_out_sec, 3.0 * amount),
     )
+
+
+def reverb_tail_seconds(settings: EffectSettings) -> float:
+    """How long the reverb is let ring out past the end of the track.
+
+    The convolution reverb is given silence to ring into, so a track ends in a
+    decaying wash rather than being cut dead. It grows with the amount: a touch
+    of reverb leaves half a second, a full room about three seconds. Zero when
+    there is no reverb.
+    """
+    amount = max(0.0, min(apply_epic(settings).reverb, 1.0))
+    return 0.0 if amount <= 1e-3 else 0.5 + 2.5 * amount
+
+
+def riser_volume(amount: float) -> float:
+    """Linear mixing volume for the riser at a 0..1 slider amount."""
+    return 0.8 * max(0.0, min(amount, 1.0))
+
+
+def impact_volume(amount: float) -> float:
+    """Linear mixing volume for the impact at a 0..1 slider amount."""
+    return 1.0 * max(0.0, min(amount, 1.0))
+
+
+@dataclass
+class Accent:
+    """A synthesised sound to mix in at a given moment of the output.
+
+    start is where the sound begins on the output timeline, in seconds. It can
+    be negative: the sound is then joined part-way through (a riser that began
+    before the excerpt being rendered).
+    """
+
+    path: str
+    start: float
+    volume: float
 
 
 def settings_to_dict(settings: EffectSettings) -> dict[str, Any]:
@@ -508,14 +554,17 @@ def build_plan(
     texture_paths: dict[str, str] | None = None,
     output_duration: float = 0.0,
     reverb_ir: str | None = None,
+    accents: Sequence[Accent] | None = None,
 ) -> ChainPlan:
-    """Produce a ChainPlan, folding in the reverb impulse response and textures.
+    """Produce a ChainPlan, folding in the reverb impulse response, textures and
+    accents (the riser and impact).
 
     texture_paths maps a texture name to its wav path. Only textures whose
     intensity is above zero and that have a path are mixed in. reverb_ir is the
     path of the impulse response for the convolution reverb; without it the
-    reverb falls back to aecho. output_duration is passed through so a fade-out
-    can be positioned.
+    reverb falls back to aecho. accents are one-off sounds placed at a time on
+    the output. output_duration is passed through so a fade-out can be
+    positioned; it should include the reverb tail (see reverb_tail_seconds).
     """
     settings = apply_epic(settings)
     texture_paths = texture_paths or {}
@@ -526,8 +575,9 @@ def build_plan(
         if amount > 1e-3 and texture_paths.get(name)
     ]
     convolve = settings.reverb > 1e-3 and bool(reverb_ir)
+    accents = [a for a in (accents or []) if a.volume > 1e-3]
 
-    if not active and not convolve:
+    if not active and not convolve and not accents:
         return ChainPlan(
             audio_filters=build_filters(settings, sample_rate, output_duration)
         )
@@ -537,6 +587,8 @@ def build_plan(
     graph.chain(stages.pre)
 
     if convolve:
+        # Silence after the track gives the reverb room to ring out.
+        graph.chain([f"apad=pad_dur={reverb_tail_seconds(settings):.2f}"])
         dry, wet = reverb_mix(settings.reverb)
         ir_pad = graph.side_chain(
             graph.add_input(reverb_ir), [f"aresample={sample_rate}"]
@@ -559,7 +611,7 @@ def build_plan(
 
     graph.chain(stages.post)
 
-    if active:
+    if active or accents:
         pads = []
         for _, path, amount in active:
             pads.append(
@@ -569,6 +621,13 @@ def build_plan(
                         "aloop=loop=-1:size=2147483647",
                         f"volume={_texture_volume(amount):.4f}",
                     ],
+                )
+            )
+        for accent in accents:
+            pads.append(
+                graph.side_chain(
+                    graph.add_input(accent.path),
+                    _accent_filters(accent, sample_rate),
                 )
             )
         count = len(pads) + 1
@@ -585,6 +644,25 @@ def build_plan(
     return ChainPlan(
         filter_complex=graph.finish(), extra_inputs=graph.extra_inputs
     )
+
+
+def _accent_filters(accent: Accent, sample_rate: int) -> list[str]:
+    """Filters that put an accent at its moment and keep it "alive" afterwards.
+
+    A negative start trims the front of the sound instead of delaying it. The
+    trailing apad turns the end of the sound into endless silence: amix rescales
+    the remaining inputs whenever one ends, which would make the music jump in
+    level as the accent finishes.
+    """
+    chain = [f"aresample={sample_rate}"]
+    if accent.start < 0:
+        chain += [f"atrim=start={-accent.start:.3f}", "asetpts=PTS-STARTPTS"]
+    else:
+        ms = int(round(accent.start * 1000))
+        if ms > 0:
+            chain.append(f"adelay={ms}|{ms}")
+    chain += ["apad", f"volume={accent.volume:.3f}"]
+    return chain
 
 
 def _texture_volume(amount: float) -> float:
