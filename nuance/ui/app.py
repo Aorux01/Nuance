@@ -1188,8 +1188,11 @@ class NuanceApp:
         self._export_cancelled = False
         self._set_busy(True)
         try:
+            loop = asyncio.get_running_loop()
             await asyncio.to_thread(
-                runner.run, self._on_batch_progress, self._on_batch_status
+                runner.run,
+                self._on_loop(loop, self._on_batch_progress),
+                self._on_loop(loop, self._on_batch_status),
             )
         finally:
             self._batch_runner = None
@@ -1296,7 +1299,7 @@ class NuanceApp:
                 self.settings,
                 self.tags,
                 "320k",
-                self._on_progress,
+                self._on_loop(asyncio.get_running_loop(), self._on_progress),
                 self._remember_process,
                 self._video_spec(fmt),
             )
@@ -1318,6 +1321,21 @@ class NuanceApp:
         self.status_label.color = theme.SUCCESS
         self._notify("Export complete", theme.SUCCESS)
         self.page.update()
+
+    @staticmethod
+    def _on_loop(loop: asyncio.AbstractEventLoop, fn):
+        """Wrap `fn` so a worker thread can call it safely.
+
+        The progress callbacks fire on FFmpeg's worker thread, but Flet only
+        pushes a control change to the screen promptly when page.update() runs on
+        its own event loop; from another thread the change sat unsent until the
+        next click or window switch. The wrapper hands the call to the loop.
+        """
+
+        def call(*args):
+            loop.call_soon_threadsafe(fn, *args)
+
+        return call
 
     def _remember_process(self, proc) -> None:
         """Called from the worker thread with the live FFmpeg process."""

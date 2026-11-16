@@ -32,6 +32,28 @@ def test_build_command_excerpt():
     assert cmd.index("-ss") < len(cmd) - 1
 
 
+def test_command_only_uses_options_ffplay_really_has():
+    """ffplay rejects unknown options and exits at once (it has no -nostdin, which
+    once made playback silently do nothing), so check against the real program."""
+    import re
+    import shutil
+
+    ffplay = shutil.which("ffplay")
+    if ffplay is None:
+        pytest.skip("ffplay not on PATH")
+    result = subprocess.run(
+        [ffplay, "-hide_banner", "-h", "full"], capture_output=True, text=True
+    )
+    help_text = result.stdout + result.stderr  # ffplay prints its help on stderr
+    known = set(re.findall(r"^\s*-(\w+)", help_text, flags=re.MULTILINE))
+    cmd = player.build_command(ffplay, Path("a.mp3"), start=1.0, duration=2.0)
+    flags = {arg.lstrip("-") for arg in cmd[1:-1] if arg.startswith("-")}
+    # Boolean options also accept a "no" prefix (-nostats is the negation of -stats).
+    unknown = {f for f in flags if f not in known and f.removeprefix("no") not in known}
+    assert not unknown, unknown
+    assert "nostdin" not in flags
+
+
 def test_map_fraction_clamps_and_guards_zero_length():
     assert player.map_fraction(5, 10) == 0.5
     assert player.map_fraction(-1, 10) == 0.0

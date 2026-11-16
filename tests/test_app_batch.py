@@ -205,13 +205,40 @@ def test_cancelling_a_batch_stops_it(window, tmp_path, make_tone):
     def cancel_on_first_done(index, item):
         original(index, item)
         if item.status == batch.DONE:
-            asyncio.run(window._on_cancel_export(None))
+            # What the Cancel button does, minus the click.
+            window._export_cancelled = True
+            window._batch_runner.cancel()
 
     window._on_batch_status = cancel_on_first_done
     asyncio.run(window._on_export_click(None))
 
     assert [t.value for _, t in window._batch_rows] == ["Done", "Cancelled", "Cancelled"]
     assert window.status_label.value == "1 done, 2 cancelled"
+
+
+def test_cancel_button_cancels_the_running_batch(window, tmp_path):
+    runner = batch.BatchRunner([], EffectSettings())
+    window._batch_runner = runner
+    asyncio.run(window._on_cancel_export(None))
+    assert runner.cancelled
+    assert window._export_cancelled
+
+
+def test_progress_callbacks_are_handed_to_the_ui_loop():
+    """Worker-thread callbacks must run on the event loop, not on the thread."""
+    import threading
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        ran_on = []
+        wrapped = app.NuanceApp._on_loop(loop, lambda x: ran_on.append(
+            (x, threading.current_thread() is threading.main_thread())
+        ))
+        await asyncio.to_thread(wrapped, 0.5)  # called from a worker thread
+        await asyncio.sleep(0)  # let the loop run what was handed to it
+        return ran_on
+
+    assert asyncio.run(scenario()) == [(0.5, True)]
 
 
 @needs_ffmpeg

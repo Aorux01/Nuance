@@ -22,11 +22,12 @@ def is_available() -> bool:
 def build_command(
     ffplay: str, path: Path, start: float = 0.0, duration: float = 0.0
 ) -> list[str]:
-    """The ffplay command line: headless, quits at the end, optional excerpt."""
-    command = [
-        ffplay, "-nodisp", "-autoexit", "-nostats", "-nostdin",
-        "-loglevel", "quiet",
-    ]
+    """The ffplay command line: headless, quits at the end, optional excerpt.
+
+    Note that ffplay has no -nostdin (only ffmpeg does): passing it makes ffplay
+    exit at once. The caller gives it a null stdin instead.
+    """
+    command = [ffplay, "-nodisp", "-autoexit", "-nostats", "-loglevel", "quiet"]
     if start > 0:
         command += ["-ss", f"{start:.3f}"]
     if duration > 0:
