@@ -2,8 +2,8 @@
 
 import pytest
 
-from nuance.audio.processor import _estimate_duration
 from nuance.audio.effects import EffectSettings
+from nuance.audio.processor import _estimate_duration
 
 
 def test_estimate_zero_duration_stays_zero():

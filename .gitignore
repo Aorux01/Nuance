@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Clean virtualenv used to build the standalone executable
+.buildenv/

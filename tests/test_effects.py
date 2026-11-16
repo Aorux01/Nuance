@@ -3,7 +3,6 @@
 These are pure string-building functions, so no audio or FFmpeg is needed.
 """
 
-import math
 
 import pytest
 
@@ -225,6 +224,49 @@ def test_loop_one_omitted():
     )
 
 
+def test_wow_flutter_adds_two_vibratos():
+    filters = effects.build_filters(EffectSettings(wow_flutter=0.5), SR)
+    vibratos = [f for f in filters if f.startswith("vibrato=")]
+    assert len(vibratos) == 2
+    wow_depth = float(vibratos[0].split("d=")[1])
+    flutter_depth = float(vibratos[1].split("d=")[1])
+    assert wow_depth > flutter_depth > 0
+
+
+def test_wow_flutter_depth_scales_with_amount():
+    def wow(amount):
+        f = effects.build_filters(EffectSettings(wow_flutter=amount), SR)[0]
+        return float(f.split("d=")[1])
+
+    assert wow(0.2) < wow(1.0) <= 1.0
+
+
+def test_wow_flutter_zero_omitted():
+    filters = effects.build_filters(EffectSettings(wow_flutter=0.0), SR)
+    assert not any(f.startswith("vibrato=") for f in filters)
+
+
+def test_chorus_adds_filter_and_zero_omits_it():
+    assert any(
+        f.startswith("chorus=")
+        for f in effects.build_filters(EffectSettings(chorus=0.5), SR)
+    )
+    assert not any(
+        f.startswith("chorus=")
+        for f in effects.build_filters(EffectSettings(chorus=0.0), SR)
+    )
+
+
+def test_tape_and_chorus_come_before_reverb():
+    s = EffectSettings(reverb=0.5, chorus=0.5, wow_flutter=0.5)
+    filters = effects.build_filters(s, SR)
+    echo = next(i for i, f in enumerate(filters) if f.startswith("aecho="))
+    last_colour = max(
+        i for i, f in enumerate(filters) if f.startswith(("vibrato=", "chorus="))
+    )
+    assert last_colour < echo
+
+
 # -- mastering chain -----------------------------------------------------------
 
 
@@ -285,6 +327,20 @@ def test_punch_zero_omitted():
 def test_loudnorm_present_with_target():
     filters = effects.build_filters(EffectSettings(loudness_lufs=-9.0), SR)
     assert any(f.startswith("loudnorm=I=-9.0:") for f in filters)
+
+
+def test_loudnorm_is_followed_by_a_resample_back_to_the_source_rate():
+    """loudnorm emits 192 kHz; without this lossless exports come out at 192 kHz."""
+    filters = effects.build_filters(EffectSettings(loudness_lufs=-9.0), 48000)
+    norm = next(i for i, f in enumerate(filters) if f.startswith("loudnorm="))
+    assert filters[norm + 1].startswith("aresample=48000")
+
+
+def test_loudnorm_resample_comes_before_fades():
+    s = EffectSettings(loudness_lufs=-9.0, fade_in_sec=1.0)
+    filters = effects.build_filters(s, SR)
+    resample = max(i for i, f in enumerate(filters) if f.startswith("aresample="))
+    assert resample < filters.index("afade=t=in:st=0:d=1.00")
 
 
 def test_loudnorm_skipped_at_sentinel():
@@ -359,6 +415,14 @@ def test_energy_boost_preset_has_the_signature_chain():
 
 
 # -- presets ---------------------------------------------------------------
+
+
+def test_new_presets_exist_and_use_the_new_effects():
+    assert effects.get_preset("Vaporwave").chorus > 0
+    assert effects.get_preset("Lo-Fi").wow_flutter > 0
+    daycore = effects.get_preset("Daycore")
+    assert daycore.speed < 1.0 and daycore.keep_pitch
+    assert effects.get_preset("8D Audio").autopan > 0
 
 
 def test_preset_names_stable():

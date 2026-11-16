@@ -8,7 +8,6 @@ The file is a single JSON object: {"My preset": {<settings>}, ...}.
 import json
 import os
 from pathlib import Path
-from typing import Dict, List
 
 from nuance.audio import effects
 from nuance.audio.effects import EffectSettings
@@ -39,7 +38,7 @@ def _presets_path() -> Path:
     return _config_dir() / _FILE_NAME
 
 
-def _load_raw() -> Dict[str, dict]:
+def _load_raw() -> dict[str, dict]:
     path = _presets_path()
     if not path.exists():
         return {}
@@ -50,13 +49,13 @@ def _load_raw() -> Dict[str, dict]:
     return data if isinstance(data, dict) else {}
 
 
-def _write_raw(data: Dict[str, dict]) -> None:
+def _write_raw(data: dict[str, dict]) -> None:
     _presets_path().write_text(
         json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
     )
 
 
-def names() -> List[str]:
+def names() -> list[str]:
     """User preset names, alphabetically."""
     return sorted(_load_raw().keys())
 

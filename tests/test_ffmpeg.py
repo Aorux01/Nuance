@@ -101,3 +101,47 @@ class TestEndToEnd:
         # ~2 seconds at 8 kHz.
         assert 14000 < samples.size < 18000
         assert samples.dtype == np.float32
+
+    @pytest.mark.parametrize("ext", ["mp3", "wav", "flac", "mka"])
+    def test_run_filters_writes_each_output_format(self, source, tmp_path, ext):
+        dest = tmp_path / f"out.{ext}"
+        ffmpeg.run_filters(source, dest, [], input_duration=1.0)
+        assert dest.exists()
+        assert ffmpeg.probe(dest).duration == pytest.approx(1.0, abs=0.3)
+
+    def test_run_filters_writes_mux_metadata(self, source, tmp_path):
+        dest = tmp_path / "out.mka"
+        ffmpeg.run_filters(
+            source, dest, [], input_duration=1.0,
+            metadata={"title": "Hello", "artist": "World"},
+        )
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet", "-show_entries",
+                "format_tags=title,artist", "-of", "default=nw=1", str(dest),
+            ],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert "Hello" in out
+        assert "World" in out
+
+    def test_run_filters_cancel_via_terminate(self, source, tmp_path):
+        dest = tmp_path / "out.mp3"
+
+        def kill_it(proc):
+            proc.terminate()
+
+        with pytest.raises(ffmpeg.FFmpegCancelled):
+            ffmpeg.run_filters(
+                source, dest, ["atempo=0.5"], on_process_start=kill_it
+            )
+
+
+def test_encoding_args_by_extension():
+    from pathlib import Path
+
+    assert ffmpeg._encoding_args(Path("x.mp3"), "320k") == [
+        "-c:a", "libmp3lame", "-b:a", "320k"
+    ]
+    assert ffmpeg._encoding_args(Path("x.wav"), "320k") == ["-c:a", "pcm_s16le"]
+    assert ffmpeg._encoding_args(Path("x.flac"), "320k") == ["-c:a", "flac"]

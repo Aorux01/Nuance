@@ -4,19 +4,25 @@
 
 <h1 align="center">Nuance</h1>
 
-Nuance is a free, open-source desktop toolbox to customize and remix your MP3
+Nuance is a free, open-source desktop toolbox to customize and remix your audio
 files. Load a track, pick a preset or dial in your own effects, edit the tags
 and cover, then export. Everything runs locally on your machine, with no
 internet connection, no accounts and no file size limits.
 
 It is built for the sound trends people actually make and share: Sped Up,
-Nightcore, Slowed + Reverb, Chopped & Screwed, Phonk, Lo-Fi and Energy Boost.
+Nightcore, Slowed + Reverb, Chopped & Screwed, Daycore, Vaporwave, Phonk, Lo-Fi,
+8D Audio and Energy Boost.
 
 ## Features
 
+- Opens MP3, WAV, FLAC, M4A, OGG and MKA; exports to MP3, WAV, FLAC or MKA, or
+  to an MP4 / MKV video (the audio over the cover art, a picture you choose, or
+  a plain background) ready to post.
 - One-click presets: Sped Up, Nightcore, Slowed + Reverb, Chopped & Screwed,
-  Phonk, Lo-Fi, Energy Boost.
+  Daycore, Vaporwave, Phonk, Lo-Fi, 8D Audio, Energy Boost.
 - Manual controls for speed, pitch, bass boost, reverb and loop count.
+- Convolution reverb: a synthesised hall impulse response, not a simple echo.
+- Tape wobble (wow & flutter) and chorus sliders for lo-fi and vaporwave sounds.
 - Optional "keep pitch" mode to change tempo without changing pitch.
 - Muffled slider to roll off the high frequencies for a lo-fi, telephone tone.
 - Bitcrush slider for a crunchy, retro console sound.
@@ -25,17 +31,29 @@ Nightcore, Slowed + Reverb, Chopped & Screwed, Phonk, Lo-Fi and Energy Boost.
 - Vinyl crackle and cassette hiss textures, each with its own intensity slider.
 - Master section: loudness normalisation, punch (compression + limiter),
   brightness, stereo width and fade in/out - the "energy boosted" sound.
-- Preview: render a short excerpt with the current settings and play it back,
-  with a "find the drop" button that jumps to the track's loudest passage.
+- Interactive waveform: click or drag to choose where the preview starts; a
+  playhead follows the sound.
+- Preview inside the app: render a short excerpt and play it, and flip between
+  the **Original** and the **Processed** version while it plays (A/B) to hear
+  exactly what the effects do. A "find the drop" button jumps to the loudest
+  passage. (In-app playback uses `ffplay`, which comes with FFmpeg.)
+- Batch: load several files at once and apply the same settings to all of them,
+  with a progress bar per file.
+- Command line: `python -m nuance remix ...` does the same without the window.
 - Save your own presets: name the current settings and reload them any time.
-- Metadata editor for title, artist, album and cover art (ID3 tags), including
-  removing an existing cover.
+- Cancellable export that never damages an existing file: results are written
+  to a temporary file and moved into place only when complete.
+- Metadata editor for title, artist, album and cover art, including removing an
+  existing cover (MP3 and FLAC; WAV/MKA carry no tags).
 - 100% local: no servers, no uploads, no ads.
+
+See [ROADMAP.md](ROADMAP.md) for what's planned next.
 
 ## Requirements
 
-- Python 3.10 or newer.
-- FFmpeg (both `ffmpeg` and `ffprobe`) available on your system PATH.
+- Python 3.10 or newer (only to run from source; the packaged `.exe` bundles it).
+- FFmpeg (both `ffmpeg` and `ffprobe`) available on your system PATH. Nuance
+  shows a guided install prompt if it can't find them.
 
 ### Installing FFmpeg
 
@@ -64,7 +82,8 @@ only bundles what Nuance needs, then run the Flet packager:
 python -m venv .buildenv
 .buildenv\Scripts\activate
 pip install -r requirements.txt pyinstaller
-flet pack main.py --name Nuance --icon nuance/ui/icon.ico --add-data "nuance/ui/icon.ico:nuance/ui"
+flet pack main.py --name Nuance --icon nuance/ui/icon.ico ^
+  --add-data "nuance/ui/icon.ico;nuance/ui"
 ```
 
 The single-file executable is written to the `dist` folder. Building inside a
@@ -77,10 +96,27 @@ FFmpeg is not bundled, so the machine running the app still needs `ffmpeg` and
 
 ## How to use
 
-1. Click the load area and choose an MP3 file.
+1. Click the load area and choose one or more audio files.
 2. Pick a preset, or adjust the sliders and switches for a custom sound.
-3. Optionally edit the title, artist, album and cover art.
-4. Click "Export MP3" and choose where to save the result.
+3. Click the waveform to choose where the preview starts, then use
+   **Processed** to hear a short excerpt and **Original** to compare.
+4. Optionally edit the title, artist, album and cover art.
+5. Choose an output format and click Export, then pick where to save it (a
+   folder, if you loaded several files).
+
+## Command line
+
+```
+python -m nuance presets
+python -m nuance remix song.mp3 --preset nightcore
+python -m nuance remix *.mp3 --preset "Slowed + Reverb" --out-dir remixes
+python -m nuance remix song.flac --speed 0.85 --reverb 0.5 -o slowed.mp3
+python -m nuance remix song.mp3 --preset phonk -f mp4 --image cover.png
+```
+
+Every effect has its own flag (see `python -m nuance remix --help`) and
+overrides the preset. Existing files are never overwritten unless you pass
+`--overwrite`; the exit code is 0 only if every file succeeded.
 
 ## Note
 
@@ -95,8 +131,11 @@ FFmpeg is not bundled, so the machine running the app still needs `ffmpeg` and
 | Nightcore         | Even faster with an extra pitch lift.               |
 | Slowed + Reverb   | Slower tempo with a spacious reverb tail.           |
 | Chopped & Screwed | Heavily slowed and pitched down.                    |
+| Daycore           | Slowed with the pitch kept, muffled and reverberant. |
+| Vaporwave         | Slowed and pitched down, chorus, tape wobble, reverb. |
 | Phonk             | Slightly slowed with a strong sub-bass boost.       |
-| Lo-Fi             | Slightly slowed, soft reverb and vinyl texture.     |
+| Lo-Fi             | Slightly slowed, soft reverb, tape wobble and vinyl. |
+| 8D Audio          | The sound circles between your ears.                |
 | Energy Boost      | Slight speed-up, brighter, wider, compressed and loud. |
 
 You can also save your own presets: dial in the settings you like, type a name
@@ -108,28 +147,39 @@ Windows, `~/.config/Nuance` elsewhere).
 ## Project layout
 
 ```
-main.py                  Application entry point.
+main.py                  Application entry point (the window).
 nuance/
+  __main__.py            `python -m nuance` runs the command line.
+  cli.py                 The command line interface.
   audio/
-    ffmpeg.py            FFmpeg and ffprobe wrapper.
+    ffmpeg.py            FFmpeg and ffprobe wrapper (audio and video output).
     effects.py           Presets and audio filter chains.
-    textures.py          Synthesised background textures.
+    textures.py          Synthesised textures and the reverb impulse response.
     highlights.py        Finds the track's loudest passage (the drop).
+    waveform.py          Builds the waveform image for a track.
     userpresets.py       Load, save and delete the user's own presets.
-    metadata.py          ID3 tag and cover art editor.
+    metadata.py          Tag and cover art editor (MP3 / FLAC / ...).
     processor.py         Ties effects and metadata into one export; previews.
+    batch.py             Plans and runs a batch of files.
+    naming.py            Output file names that never clobber a file.
+    player.py            In-app playback through ffplay.
   ui/
     app.py               The main window and all controls.
+    waveform_view.py     The interactive waveform (marker, band, playhead).
     theme.py             Colors and shared styling.
     icon.ico             Application and window icon.
 tests/                   pytest suite for the audio core.
 ```
 
+[ARCHITECTURE.md](ARCHITECTURE.md) describes what each module does and how an
+export flows through them.
+
 ## Running the tests
 
 ```
-pip install pytest
+pip install -e ".[dev]"
 python -m pytest
+ruff check .
 ```
 
 Tests that need FFmpeg are skipped automatically when it is not on PATH.

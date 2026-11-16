@@ -1,3 +1,3 @@
-"""Nuance: a drag-and-drop toolbox to customize MP3 files."""
+"""Nuance: a local desktop toolbox to customize and remix audio files."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

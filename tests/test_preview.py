@@ -59,17 +59,20 @@ def test_render_preview_applies_speed(source, tmp_path):
     assert ffmpeg.probe(out).duration == pytest.approx(5.0, abs=0.4)
 
 
-def test_render_preview_reuses_file_on_repeat(source, tmp_path):
+def test_render_preview_reuses_file_on_repeat(source, tmp_path, monkeypatch):
     d = tmp_path / "prev"
     first = processor.render_preview(
         source, EffectSettings(), start_sec=3.0, length_sec=8.0, out_dir=d
     )
-    mtime = first.stat().st_mtime_ns
+
+    def no_render(*args, **kwargs):
+        raise AssertionError("a cache hit must not run FFmpeg again")
+
+    monkeypatch.setattr(ffmpeg, "run_filters", no_render)
     second = processor.render_preview(
         source, EffectSettings(), start_sec=3.0, length_sec=8.0, out_dir=d
     )
     assert second == first
-    assert second.stat().st_mtime_ns == mtime  # not re-rendered
 
 
 def test_render_preview_new_file_when_settings_change(source, tmp_path):

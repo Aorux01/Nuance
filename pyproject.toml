@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuance"
+version = "0.2.0"
+description = "A free, local desktop toolbox to customize and remix your audio files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Aorux01" }]
+keywords = ["audio", "remix", "nightcore", "slowed", "phonk", "lofi", "ffmpeg"]
+
+dependencies = [
+    "flet>=0.84,<0.85",
+    "mutagen>=1.47,<2",
+    "numpy>=1.24,<3",
+    "scipy>=1.10,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/Aorux01/Nuance"
+Issues = "https://github.com/Aorux01/Nuance/issues"
+
+[project.scripts]
+nuance-cli = "nuance.cli:main"
+
+[project.gui-scripts]
+nuance = "main:_run"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["nuance*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501", "B011"]

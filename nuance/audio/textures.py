@@ -11,12 +11,12 @@ sounds like real surface pops instead of a continuous hiss.
 import tempfile
 import wave
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
+from scipy.io import wavfile
 from scipy.signal import butter, lfilter
 
-TEXTURE_NAMES: List[str] = ["none", "vinyl", "cassette"]
+TEXTURE_NAMES: list[str] = ["none", "vinyl", "cassette"]
 
 _SAMPLE_RATE = 44100
 _DURATION = 6.0
@@ -24,12 +24,12 @@ _DURATION = 6.0
 _cache = {}
 
 
-def texture_names() -> List[str]:
+def texture_names() -> list[str]:
     """Return the selectable texture names, including 'none'."""
     return list(TEXTURE_NAMES)
 
 
-def get_texture_path(name: str) -> Optional[str]:
+def get_texture_path(name: str) -> str | None:
     """Return a path to a cached texture wav, generating it if needed.
 
     Returns None for 'none' or unknown names.
@@ -44,6 +44,77 @@ def get_texture_path(name: str) -> Optional[str]:
     path = _generate(name)
     _cache[name] = path
     return path
+
+
+# Bump the version in the file name whenever the synthesis changes, so a stale
+# cached impulse response is never reused.
+_IR_FILE = "reverb_hall_v1.wav"
+_IR_RT60 = 2.8  # seconds for the tail to fall by 60 dB
+_IR_PREDELAY = 0.014  # seconds before the room responds
+
+
+def get_reverb_ir_path() -> str:
+    """Return a path to the synthetic hall impulse response, making it if needed.
+
+    The convolution reverb needs an impulse response; like the textures it is
+    synthesised with numpy rather than shipped as an audio asset.
+    """
+    out_dir = Path(tempfile.gettempdir()) / "nuance_textures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / _IR_FILE
+    if not path.exists():
+        wavfile.write(str(path), _SAMPLE_RATE, build_reverb_ir().astype(np.float32))
+    return str(path)
+
+
+def build_reverb_ir(sample_rate: int = _SAMPLE_RATE) -> np.ndarray:
+    """Build a stereo hall impulse response as a (samples, 2) float array.
+
+    Each channel is an early-reflection burst followed by a decaying noise tail
+    that darkens as it fades (high frequencies die first in a real room). The
+    two channels use different noise so the reverb is wide. Each channel is
+    scaled to unit energy, so convolving with it keeps the signal's loudness.
+    """
+    channels = [_reverb_ir_channel(seed, sample_rate) for seed in (7, 11)]
+    length = max(len(c) for c in channels)
+    out = np.zeros((length, 2))
+    for i, channel in enumerate(channels):
+        out[: len(channel), i] = channel
+    return out
+
+
+def _reverb_ir_channel(seed: int, sample_rate: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    tail_len = int(sample_rate * _IR_RT60 * 1.15)
+    t = np.arange(tail_len) / sample_rate
+
+    noise = rng.standard_normal(tail_len)
+    nyquist = sample_rate / 2
+    b_lo, a_lo = butter(1, 2500 / nyquist)
+    dark = lfilter(b_lo, a_lo, noise)
+
+    # Bright noise decays faster than dark noise: crossfade as time passes.
+    bright_env = np.exp(-6.9 * t / (_IR_RT60 * 0.55))
+    dark_env = np.exp(-6.9 * t / _IR_RT60)
+    tail = noise * bright_env * 0.5 + dark * dark_env * 1.2
+    # Ease in so the tail does not click on, and keep the low end tidy.
+    tail *= np.minimum(t / 0.04, 1.0)
+    b_hi, a_hi = butter(1, 120 / nyquist, btype="high")
+    tail = lfilter(b_hi, a_hi, tail)
+
+    predelay = int(sample_rate * _IR_PREDELAY)
+    out = np.zeros(predelay + tail_len)
+    out[predelay:] = tail
+
+    # A handful of discrete early reflections inside the first ~90 ms.
+    for _ in range(10):
+        position = predelay + int(rng.uniform(0.004, 0.09) * sample_rate)
+        out[position] += rng.choice([-1.0, 1.0]) * rng.uniform(0.4, 1.0) * np.max(
+            np.abs(tail)
+        ) * 1.5
+
+    energy = float(np.sqrt(np.sum(out**2)))
+    return out / energy if energy > 0 else out
 
 
 def _generate(name: str) -> str:

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from nuance.audio import userpresets
-from nuance.audio.effects import EffectSettings, NO_LOUDNORM
+from nuance.audio.effects import NO_LOUDNORM, EffectSettings
 from nuance.ui import app
 
 

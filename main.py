@@ -22,5 +22,10 @@ def main(page: ft.Page) -> None:
     NuanceApp(page, icon_path=resource_path("nuance/ui/icon.ico"))
 
 
-if __name__ == "__main__":
+def _run() -> None:
+    """Console/gui entry point used by the packaged `nuance` command."""
     ft.run(main)
+
+
+if __name__ == "__main__":
+    _run()

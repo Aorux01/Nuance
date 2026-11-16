@@ -89,3 +89,59 @@ def test_load_cover_file_falls_back_for_unknown_type(tmp_path):
     p.write_bytes(b"\x00\x01\x02")
     _, mime = metadata.load_cover_file(p)
     assert mime == "image/jpeg"
+
+
+# -- multi-format tag support ---------------------------------------------
+
+
+def _make(tmp_path, ext):
+    path = tmp_path / f"s.{ext}"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", "1", str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
+def test_supports_tag_writing_by_format(tmp_path):
+    assert metadata.supports_tag_writing(tmp_path / "x.mp3")
+    assert metadata.supports_tag_writing(tmp_path / "x.flac")
+    assert not metadata.supports_tag_writing(tmp_path / "x.wav")
+    assert not metadata.supports_tag_writing(tmp_path / "x.mka")
+
+
+def test_flac_tag_round_trip(tmp_path):
+    path = _make(tmp_path, "flac")
+    metadata.write_tags(path, Tags(title="F", artist="Ar", album="Al"))
+    got = metadata.read_tags(path)
+    assert (got.title, got.artist, got.album) == ("F", "Ar", "Al")
+
+
+def test_flac_cover_round_trip(tmp_path):
+    path = _make(tmp_path, "flac")
+    metadata.write_tags(path, Tags(cover_data=PNG_1PX, cover_mime="image/png"))
+    got = metadata.read_tags(path)
+    assert got.cover_data == PNG_1PX
+
+
+def test_flac_remove_cover(tmp_path):
+    path = _make(tmp_path, "flac")
+    metadata.write_tags(path, Tags(cover_data=PNG_1PX, cover_mime="image/png"))
+    metadata.write_tags(path, Tags(remove_cover=True))
+    assert metadata.read_tags(path).cover_data is None
+
+
+def test_wav_write_tags_is_noop(tmp_path):
+    path = _make(tmp_path, "wav")
+    metadata.write_tags(path, Tags(title="X"))  # must not raise
+    assert metadata.read_tags(path).title == ""
+
+
+def test_read_tags_on_unreadable_file_returns_empty(tmp_path):
+    p = tmp_path / "bogus.flac"
+    p.write_bytes(b"not a flac")
+    assert metadata.read_tags(p) == Tags()

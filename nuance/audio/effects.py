@@ -1,7 +1,7 @@
 """Build FFmpeg audio filter chains from a set of user-facing settings."""
 
 from dataclasses import asdict, dataclass, field, fields, replace
-from typing import Any, Dict, List
+from typing import Any
 
 
 @dataclass
@@ -35,6 +35,10 @@ class EffectSettings:
     fade_out_sec: linear fade-out length in seconds at the end. 0 = off.
     autopan: 0..1 amount of "8D audio" auto-panning: the sound circles between
         the ears. 0 = off.
+    wow_flutter: 0..1 amount of tape-style pitch wobble (slow "wow" plus fast
+        "flutter"). 0 = off.
+    chorus: 0..1 amount of chorus, a shimmering doubled voice (the vaporwave
+        sound). 0 = off.
     """
 
     speed: float = 1.0
@@ -55,6 +59,8 @@ class EffectSettings:
     fade_in_sec: float = 0.0
     fade_out_sec: float = 0.0
     autopan: float = 0.0
+    wow_flutter: float = 0.0
+    chorus: float = 0.0
 
 
 # Frequency at or above which the muffled low-pass does nothing.
@@ -76,14 +82,23 @@ def _resample(sample_rate: int) -> str:
 
 
 # Named presets that map to the internet audio trends the app targets.
-PRESETS: Dict[str, EffectSettings] = {
+PRESETS: dict[str, EffectSettings] = {
     "Original": EffectSettings(),
     "Sped Up": EffectSettings(speed=1.25, keep_pitch=False),
     "Nightcore": EffectSettings(speed=1.30, pitch_semitones=2.0),
     "Slowed + Reverb": EffectSettings(speed=0.85, reverb=0.6),
     "Chopped & Screwed": EffectSettings(speed=0.75, pitch_semitones=-2.0, reverb=0.35),
+    "Daycore": EffectSettings(
+        speed=0.7, keep_pitch=True, reverb=0.4, muffled_hz=9000.0, bass_boost_db=3.0
+    ),
+    "Vaporwave": EffectSettings(
+        speed=0.8, reverb=0.5, chorus=0.6, wow_flutter=0.3, muffled_hz=14000.0
+    ),
     "Phonk": EffectSettings(speed=0.92, bass_boost_db=8.0, reverb=0.25),
-    "Lo-Fi": EffectSettings(speed=0.95, reverb=0.2, vinyl=0.5),
+    "Lo-Fi": EffectSettings(
+        speed=0.95, reverb=0.2, vinyl=0.5, wow_flutter=0.35, muffled_hz=12000.0
+    ),
+    "8D Audio": EffectSettings(autopan=0.8, reverb=0.2),
     "Energy Boost": EffectSettings(
         speed=1.08,
         brightness_db=3.5,
@@ -94,7 +109,7 @@ PRESETS: Dict[str, EffectSettings] = {
 }
 
 
-def preset_names() -> List[str]:
+def preset_names() -> list[str]:
     """Return preset names in a stable, display-friendly order."""
     return list(PRESETS.keys())
 
@@ -104,12 +119,12 @@ def get_preset(name: str) -> EffectSettings:
     return replace(PRESETS.get(name, EffectSettings()))
 
 
-def settings_to_dict(settings: EffectSettings) -> Dict[str, Any]:
+def settings_to_dict(settings: EffectSettings) -> dict[str, Any]:
     """Plain dict of a settings object, ready for JSON."""
     return asdict(settings)
 
 
-def settings_from_dict(data: Dict[str, Any]) -> EffectSettings:
+def settings_from_dict(data: dict[str, Any]) -> EffectSettings:
     """Build a settings object from a dict, ignoring unknown keys and keeping
     defaults for anything missing. Tolerant so an older or hand-edited file
     still loads."""
@@ -118,7 +133,7 @@ def settings_from_dict(data: Dict[str, Any]) -> EffectSettings:
     return replace(EffectSettings(), **clean)
 
 
-def build_atempo_chain(speed: float) -> List[str]:
+def build_atempo_chain(speed: float) -> list[str]:
     """Return one or more atempo filters that together apply speed.
 
     A single atempo filter only accepts factors in the 0.5..2.0 range,
@@ -128,7 +143,7 @@ def build_atempo_chain(speed: float) -> List[str]:
         return []
 
     remaining = speed
-    filters: List[str] = []
+    filters: list[str] = []
     while remaining > 2.0:
         filters.append("atempo=2.0")
         remaining /= 2.0
@@ -139,24 +154,27 @@ def build_atempo_chain(speed: float) -> List[str]:
     return filters
 
 
-def build_filters(
-    settings: EffectSettings,
-    sample_rate: int,
-    output_duration: float = 0.0,
-) -> List[str]:
-    """Translate settings into an ordered list of FFmpeg audio filters.
+@dataclass
+class _Stages:
+    """The filter chain split at the points where extra inputs may join.
 
-    This covers everything except background textures, which need a second
-    input and are handled through a filter_complex graph elsewhere.
-
-    output_duration, when > 0, is the expected length of the processed audio
-    in seconds. It is only needed to place a fade-out; without it the fade-out
-    is skipped rather than guessed wrong.
+    pre runs before the reverb, post after it, and master after any background
+    textures have been mixed in, so loudness targets hold with textures on.
     """
-    filters: List[str] = []
+
+    pre: list[str] = field(default_factory=list)
+    post: list[str] = field(default_factory=list)
+    master: list[str] = field(default_factory=list)
+
+
+def _build_stages(
+    settings: EffectSettings, sample_rate: int, output_duration: float = 0.0
+) -> _Stages:
+    """Translate settings into the three ordered filter stages."""
+    pre: list[str] = []
 
     if settings.reverse:
-        filters.append("areverse")
+        pre.append("areverse")
 
     pitch_ratio = 2 ** (settings.pitch_semitones / 12.0)
     has_pitch = abs(settings.pitch_semitones) >= 1e-3
@@ -168,67 +186,97 @@ def build_filters(
     # asetrate step, avoiding a second resample pass and the quality it costs.
     if settings.keep_pitch:
         if has_speed:
-            filters += build_atempo_chain(settings.speed)
+            pre += build_atempo_chain(settings.speed)
         if has_pitch:
             shifted = int(sample_rate * pitch_ratio)
-            filters.append(f"asetrate={shifted}")
-            filters.append(_resample(sample_rate))
-            filters += build_atempo_chain(1.0 / pitch_ratio)
+            pre.append(f"asetrate={shifted}")
+            pre.append(_resample(sample_rate))
+            pre += build_atempo_chain(1.0 / pitch_ratio)
     else:
         combined = settings.speed * (pitch_ratio if has_pitch else 1.0)
         if abs(combined - 1.0) >= 1e-3:
-            filters.append(f"asetrate={int(sample_rate * combined)}")
-            filters.append(_resample(sample_rate))
+            pre.append(f"asetrate={int(sample_rate * combined)}")
+            pre.append(_resample(sample_rate))
             # Undo only the extra tempo change the musical pitch shift added, so
             # speed still governs the final tempo.
             if has_pitch:
-                filters += build_atempo_chain(1.0 / pitch_ratio)
+                pre += build_atempo_chain(1.0 / pitch_ratio)
 
     if abs(settings.bass_boost_db) >= 1e-3:
-        filters.append(f"bass=g={settings.bass_boost_db:.2f}:f=90:width_type=q:w=0.7")
+        pre.append(f"bass=g={settings.bass_boost_db:.2f}:f=90:width_type=q:w=0.7")
 
-    if settings.reverb > 1e-3:
-        filters.append(_build_reverb(settings.reverb))
+    # Tape character and chorus colour the dry sound, so they sit before the
+    # reverb: the room then reverberates the already-wobbling signal.
+    if settings.wow_flutter > 1e-3:
+        pre += _build_wow_flutter(settings.wow_flutter)
+
+    if settings.chorus > 1e-3:
+        pre.append(_build_chorus(settings.chorus))
+
+    post: list[str] = []
 
     if settings.autopan > 1e-3:
-        filters.append(_build_autopan(settings.autopan))
+        post.append(_build_autopan(settings.autopan))
 
     if settings.muffled_hz < MAX_HZ:
         # A low-pass cutoff throws away the high frequencies for a muffled,
         # telephone-like tone. The lower the cutoff, the more muffled it is.
         cutoff = max(500.0, settings.muffled_hz)
-        filters.append(f"lowpass=f={cutoff:.0f}")
+        post.append(f"lowpass=f={cutoff:.0f}")
 
     if settings.bitcrush_bits < CLEAN_BITS:
         # Reduce bit depth and sample resolution for a crunchy retro console
         # sound. Fewer bits means a harsher, more lo-fi result.
         bits = max(1.0, settings.bitcrush_bits)
-        filters.append(
+        post.append(
             f"acrusher=bits={bits:.1f}:mode=lin:mix=1:samples=4:aa=1"
         )
 
     if settings.loop_count > 1:
         # aloop counts in samples; -1 loops forever, so we set an explicit size.
-        filters.append(f"aloop=loop={settings.loop_count - 1}:size=2147483647")
+        post.append(f"aloop=loop={settings.loop_count - 1}:size=2147483647")
 
     # Mastering-style chain: tonal shaping, then stereo width, then glue
     # compression and a brick-wall limiter, then loudness, then fades. Order
     # matters here the way it does on a mix bus, so it lives in one place.
-    filters += _build_master_chain(settings, output_duration)
+    master = _build_master_chain(settings, output_duration, sample_rate)
 
-    return filters
+    return _Stages(pre=pre, post=post, master=master)
+
+
+def build_filters(
+    settings: EffectSettings,
+    sample_rate: int,
+    output_duration: float = 0.0,
+) -> list[str]:
+    """Translate settings into an ordered list of single-input FFmpeg filters.
+
+    This is a self-contained chain usable with a plain -af. Background textures
+    and the convolution reverb need extra inputs and are added by build_plan;
+    here the reverb falls back to the lighter aecho approximation.
+
+    output_duration, when > 0, is the expected length of the processed audio
+    in seconds. It is only needed to place a fade-out; without it the fade-out
+    is skipped rather than guessed wrong.
+    """
+    stages = _build_stages(settings, sample_rate, output_duration)
+    middle = [_build_reverb(settings.reverb)] if settings.reverb > 1e-3 else []
+    return stages.pre + middle + stages.post + stages.master
 
 
 def _build_master_chain(
-    settings: EffectSettings, output_duration: float = 0.0
-) -> List[str]:
+    settings: EffectSettings,
+    output_duration: float = 0.0,
+    sample_rate: int = 44100,
+) -> list[str]:
     """Return the loudness / punch / width / brightness / fade filters, in order.
 
     This is what turns a plain speed-up into the dense, loud, "energy boosted"
     sound of the remix channels. Every stage is optional and off by default.
-    output_duration is only used to position the fade-out.
+    output_duration is only used to position the fade-out; sample_rate is the
+    rate to return to after loudnorm.
     """
-    chain: List[str] = []
+    chain: list[str] = []
 
     # 1. Brightness: a high shelf that opens up the top end for an airy feel.
     if abs(settings.brightness_db) >= 1e-3:
@@ -254,10 +302,13 @@ def _build_master_chain(
         )
         chain.append("alimiter=limit=0.97:level=false")
 
-    # 4. Loudness normalisation, always the last level-changing stage.
+    # 4. Loudness normalisation, always the last level-changing stage. loudnorm
+    #    works internally at 192 kHz and hands that rate on, so resample back
+    #    or lossless exports would come out at 192 kHz.
     if settings.loudness_lufs != NO_LOUDNORM:
         target = max(-30.0, min(settings.loudness_lufs, -5.0))
         chain.append(f"loudnorm=I={target:.1f}:TP=-1.0:LRA=11")
+        chain.append(_resample(sample_rate))
 
     # 5. Fades sit right at the ends, after everything else.
     if settings.fade_in_sec > 1e-3:
@@ -272,6 +323,9 @@ def _build_master_chain(
 def _build_reverb(amount: float) -> str:
     """Return an aecho filter approximating a hall reverb.
 
+    This is the fallback used when no impulse response is available (the real
+    reverb is a convolution, see build_plan).
+
     amount 0..1 controls both the wet mix and the tail length so that low
     values stay subtle and high values feel spacious.
     """
@@ -284,6 +338,35 @@ def _build_reverb(amount: float) -> str:
     decay3 = 0.2 * amount
     decays = f"{decay1:.3f}|{decay2:.3f}|{decay3:.3f}"
     return f"aecho={in_gain:.3f}:{out_gain:.3f}:{delays}:{decays}"
+
+
+def reverb_mix(amount: float) -> tuple[float, float]:
+    """Return (dry, wet) linear gains for the convolution reverb at amount 0..1.
+
+    The impulse response has unit energy, so a wet gain of 1 returns roughly
+    the dry level; the dry signal gives way slightly as the room grows.
+    """
+    amount = max(0.0, min(amount, 1.0))
+    return 1.0 - 0.25 * amount, 0.85 * amount
+
+
+def _build_wow_flutter(amount: float) -> list[str]:
+    """Return two vibrato filters: a slow, deep "wow" and a fast, shallow "flutter".
+
+    Together they give the unsteady pitch of a worn tape or warped record.
+    """
+    amount = max(0.0, min(amount, 1.0))
+    return [
+        f"vibrato=f=0.6:d={0.45 * amount:.3f}",
+        f"vibrato=f=6.5:d={0.08 * amount:.3f}",
+    ]
+
+
+def _build_chorus(amount: float) -> str:
+    """Return a chorus filter: two detuned, slowly modulated copies of the sound."""
+    amount = max(0.0, min(amount, 1.0))
+    out_gain = 0.45 + 0.4 * amount
+    return f"chorus=0.7:{out_gain:.3f}:50|63:0.4|0.32:0.25|0.4:2|1.3"
 
 
 def _build_autopan(amount: float) -> str:
@@ -300,7 +383,7 @@ def _build_autopan(amount: float) -> str:
 
 
 # The intensity (0..1) of each background texture, read from the settings.
-def texture_amounts(settings: EffectSettings) -> Dict[str, float]:
+def texture_amounts(settings: EffectSettings) -> dict[str, float]:
     """Return the requested intensity for each named texture layer."""
     return {"vinyl": settings.vinyl, "cassette": settings.cassette}
 
@@ -310,27 +393,93 @@ class ChainPlan:
     """A resolved plan describing how FFmpeg should be invoked.
 
     Either simple audio_filters are used, or a filter_complex string when one
-    or more texture layers must be mixed in from extra inputs.
+    or more extra inputs (texture layers, a reverb impulse response) are needed.
     """
 
-    audio_filters: List[str] = field(default_factory=list)
+    audio_filters: list[str] = field(default_factory=list)
     filter_complex: str = ""
-    extra_inputs: List[str] = field(default_factory=list)
+    extra_inputs: list[str] = field(default_factory=list)
+
+
+class _GraphBuilder:
+    """Assemble a linear filter_complex graph with side inputs joined in.
+
+    Keeps a "current" pad that each step consumes, so the graph reads like the
+    chain it replaces. Extra inputs are numbered from 1 in the order added,
+    matching how the caller appends them after the main source.
+    """
+
+    def __init__(self) -> None:
+        self.parts: list[str] = []
+        self.extra_inputs: list[str] = []
+        self.current = "[0:a]"
+        self._count = 0
+
+    def _pad(self) -> str:
+        self._count += 1
+        return f"[g{self._count}]"
+
+    def add_input(self, path: str) -> int:
+        """Register an extra input file and return its input index."""
+        self.extra_inputs.append(path)
+        return len(self.extra_inputs)
+
+    def chain(self, filters: list[str]) -> None:
+        """Run the current pad through a plain filter chain."""
+        if not filters:
+            return
+        out = self._pad()
+        self.parts.append(f"{self.current}{','.join(filters)}{out}")
+        self.current = out
+
+    def side_chain(self, index: int, filters: list[str]) -> str:
+        """Prepare extra input `index` with filters and return its pad."""
+        pad = self._pad()
+        self.parts.append(f"[{index}:a]{','.join(filters)}{pad}")
+        return pad
+
+    def join(self, template: str, side_pads: list[str]) -> None:
+        """Combine the current pad with side pads using a filter template."""
+        out = self._pad()
+        pads = "".join([self.current, *side_pads])
+        self.parts.append(f"{pads}{template}{out}")
+        self.current = out
+
+    def split(self, filters_a: list[str], filters_b: list[str]) -> str:
+        """Fork the current pad: it continues through filters_a, and filters_b
+        run on a copy whose pad is returned."""
+        src_a, src_b = self._pad(), self._pad()
+        self.parts.append(f"{self.current}asplit=2{src_a}{src_b}")
+        out_a, out_b = self._pad(), self._pad()
+        self.parts.append(f"{src_a}{','.join(filters_a) or 'anull'}{out_a}")
+        self.parts.append(f"{src_b}{','.join(filters_b) or 'anull'}{out_b}")
+        self.current = out_a
+        return out_b
+
+    def finish(self) -> str:
+        """Close the graph: the last pad becomes [out]."""
+        if not self.parts:
+            self.parts.append("[0:a]anull[out]")
+        else:
+            self.parts[-1] = self.parts[-1][: -len(self.current)] + "[out]"
+        return ";".join(self.parts)
 
 
 def build_plan(
     settings: EffectSettings,
     sample_rate: int,
-    texture_paths: Dict[str, str] = None,
+    texture_paths: dict[str, str] | None = None,
     output_duration: float = 0.0,
+    reverb_ir: str | None = None,
 ) -> ChainPlan:
-    """Produce a ChainPlan, folding in any active texture layers.
+    """Produce a ChainPlan, folding in the reverb impulse response and textures.
 
     texture_paths maps a texture name to its wav path. Only textures whose
-    intensity is above zero and that have a path are mixed in. output_duration
-    is passed through to build_filters so a fade-out can be positioned.
+    intensity is above zero and that have a path are mixed in. reverb_ir is the
+    path of the impulse response for the convolution reverb; without it the
+    reverb falls back to aecho. output_duration is passed through so a fade-out
+    can be positioned.
     """
-    filters = build_filters(settings, sample_rate, output_duration)
     texture_paths = texture_paths or {}
 
     active = [
@@ -338,32 +487,66 @@ def build_plan(
         for name, amount in texture_amounts(settings).items()
         if amount > 1e-3 and texture_paths.get(name)
     ]
+    convolve = settings.reverb > 1e-3 and bool(reverb_ir)
 
-    if not active:
-        return ChainPlan(audio_filters=filters)
-
-    # Chain the music filters on input 0, then loop each active texture on its
-    # own input, scale it by intensity, and mix everything down to [out].
-    music_chain = ",".join(filters) if filters else "anull"
-    parts = [f"[0:a]{music_chain}[music]"]
-    extra_inputs: List[str] = []
-    labels = ["[music]"]
-
-    for index, (_, path, amount) in enumerate(active, start=1):
-        extra_inputs.append(path)
-        label = f"[tex{index}]"
-        parts.append(
-            f"[{index}:a]aloop=loop=-1:size=2147483647,"
-            f"volume={_texture_volume(amount):.4f}{label}"
+    if not active and not convolve:
+        return ChainPlan(
+            audio_filters=build_filters(settings, sample_rate, output_duration)
         )
-        labels.append(label)
 
-    joined = "".join(labels)
-    parts.append(
-        f"{joined}amix=inputs={len(labels)}:duration=first:"
-        f"dropout_transition=0[out]"
+    stages = _build_stages(settings, sample_rate, output_duration)
+    graph = _GraphBuilder()
+    graph.chain(stages.pre)
+
+    if convolve:
+        dry, wet = reverb_mix(settings.reverb)
+        ir_pad = graph.side_chain(
+            graph.add_input(reverb_ir), [f"aresample={sample_rate}"]
+        )
+        # afir runs fully "wet" on its own branch; the dry/wet blend is done
+        # with plain gains because afir's own dry/wet options are not dependable
+        # across FFmpeg builds.
+        wet_pad = graph.split([f"volume={dry:.3f}"], ["anull"])
+        wet_out = graph._pad()
+        graph.parts.append(
+            f"{wet_pad}{ir_pad}afir=dry=1:wet=1:gtype=-1:irnorm=-1:irgain=1:"
+            f"maxir=6,volume={wet:.3f}{wet_out}"
+        )
+        # amix halves each input, hence volume=2; the limiter catches the sum.
+        graph.join(
+            "amix=inputs=2:duration=first:dropout_transition=0,volume=2,"
+            "alimiter=limit=0.98:level=false",
+            [wet_out],
+        )
+
+    graph.chain(stages.post)
+
+    if active:
+        pads = []
+        for _, path, amount in active:
+            pads.append(
+                graph.side_chain(
+                    graph.add_input(path),
+                    [
+                        "aloop=loop=-1:size=2147483647",
+                        f"volume={_texture_volume(amount):.4f}",
+                    ],
+                )
+            )
+        count = len(pads) + 1
+        # amix scales every input by 1/count; volume=count puts the music back
+        # at its own level (the texture/music ratio is unchanged by that).
+        graph.join(
+            f"amix=inputs={count}:duration=first:dropout_transition=0,"
+            f"volume={count}",
+            pads,
+        )
+
+    graph.chain(stages.master)
+
+    return ChainPlan(
+        filter_complex=graph.finish(), extra_inputs=graph.extra_inputs
     )
-    return ChainPlan(filter_complex=";".join(parts), extra_inputs=extra_inputs)
 
 
 def _texture_volume(amount: float) -> float:
