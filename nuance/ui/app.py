@@ -171,6 +171,8 @@ class NuanceApp:
     #   label     -> optional "{value}..." tooltip on the slider thumb
     #   coerce    -> optional value transform, e.g. sentinel handling or rounding
     _SLIDER_SPECS = [
+        dict(name="epic", attr="epic", min=0, max=1, divisions=20,
+             fmt=_fmt_amount),
         dict(name="speed", attr="speed", min=0.5, max=1.6, divisions=110,
              fmt=_fmt_speed, label="{value}x"),
         dict(name="pitch", attr="pitch_semitones", min=-6, max=6, divisions=24,
@@ -537,6 +539,7 @@ class NuanceApp:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=8,
                 ),
+                self._slider_row("Epic", self.epic_slider, self.epic_value),
                 ft.Divider(color=theme.BORDER, height=24),
                 theme.section_title("Adjust"),
                 self._slider_row("Speed", self.speed_slider, self.speed_value),

@@ -10,8 +10,8 @@ and cover, then export. Everything runs locally on your machine, with no
 internet connection, no accounts and no file size limits.
 
 It is built for the sound trends people actually make and share: Sped Up,
-Nightcore, Slowed + Reverb, Chopped & Screwed, Daycore, Vaporwave, Phonk, Lo-Fi,
-8D Audio and Energy Boost.
+Nightcore, Slowed + Reverb, Chopped & Screwed, Epic, Daycore, Vaporwave, Phonk,
+Lo-Fi, 8D Audio and Energy Boost.
 
 ## Features
 
@@ -19,7 +19,12 @@ Nightcore, Slowed + Reverb, Chopped & Screwed, Daycore, Vaporwave, Phonk, Lo-Fi,
   to an MP4 / MKV video (the audio over the cover art, a picture you choose, or
   a plain background) ready to post.
 - One-click presets: Sped Up, Nightcore, Slowed + Reverb, Chopped & Screwed,
-  Daycore, Vaporwave, Phonk, Lo-Fi, 8D Audio, Energy Boost.
+  Epic, Daycore, Vaporwave, Phonk, Lo-Fi, 8D Audio, Energy Boost.
+- **Epic** slider: one knob from 0 to 100% that slows the track a little,
+  lowers the pitch and adds a big reverb, deep bass, a wide stereo image,
+  punch and slow fades, all together. It stacks on top of your other
+  settings, so you can dial the cinematic version in without touching
+  eight sliders.
 - Manual controls for speed, pitch, bass boost, reverb and loop count.
 - Convolution reverb: a synthesised hall impulse response, not a simple echo.
 - Tape wobble (wow & flutter) and chorus sliders for lo-fi and vaporwave sounds.
@@ -131,6 +136,7 @@ overrides the preset. Existing files are never overwritten unless you pass
 | Nightcore         | Even faster with an extra pitch lift.               |
 | Slowed + Reverb   | Slower tempo with a spacious reverb tail.           |
 | Chopped & Screwed | Heavily slowed and pitched down.                    |
+| Epic              | Cinematic: slower, lower, huge reverb, deep bass, wide and punchy. |
 | Daycore           | Slowed with the pitch kept, muffled and reverberant. |
 | Vaporwave         | Slowed and pitched down, chorus, tape wobble, reverb. |
 | Phonk             | Slightly slowed with a strong sub-bass boost.       |

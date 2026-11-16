@@ -142,6 +142,7 @@ def _make_plan(
     settings: EffectSettings, sample_rate: int, output_duration: float
 ) -> effects.ChainPlan:
     """Resolve textures and the reverb impulse response, then build the plan."""
+    settings = effects.apply_epic(settings)  # so the reverb check sees the macro
     reverb_ir = textures.get_reverb_ir_path() if settings.reverb > 1e-3 else None
     return effects.build_plan(
         settings,
@@ -236,6 +237,7 @@ def _estimate_duration(duration: float, settings: EffectSettings) -> float:
     """Estimate output length so progress reporting scales correctly."""
     if duration <= 0:
         return 0.0
+    settings = effects.apply_epic(settings)  # the macro changes the speed
     result = duration
     if settings.speed > 0 and abs(settings.speed - 1.0) >= 1e-3:
         result /= settings.speed

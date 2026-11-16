@@ -39,6 +39,10 @@ class EffectSettings:
         "flutter"). 0 = off.
     chorus: 0..1 amount of chorus, a shimmering doubled voice (the vaporwave
         sound). 0 = off.
+    epic: 0..1 "epic" macro: one knob that slows the track a little, lowers the
+        pitch and adds a big reverb, deep bass, a wide stereo image, punch and
+        slow fades, all scaled together. It stacks on top of the other settings
+        (see apply_epic). 0 = off.
     """
 
     speed: float = 1.0
@@ -61,6 +65,7 @@ class EffectSettings:
     autopan: float = 0.0
     wow_flutter: float = 0.0
     chorus: float = 0.0
+    epic: float = 0.0
 
 
 # Frequency at or above which the muffled low-pass does nothing.
@@ -88,6 +93,7 @@ PRESETS: dict[str, EffectSettings] = {
     "Nightcore": EffectSettings(speed=1.30, pitch_semitones=2.0),
     "Slowed + Reverb": EffectSettings(speed=0.85, reverb=0.6),
     "Chopped & Screwed": EffectSettings(speed=0.75, pitch_semitones=-2.0, reverb=0.35),
+    "Epic": EffectSettings(epic=0.85),
     "Daycore": EffectSettings(
         speed=0.7, keep_pitch=True, reverb=0.4, muffled_hz=9000.0, bass_boost_db=3.0
     ),
@@ -117,6 +123,35 @@ def preset_names() -> list[str]:
 def get_preset(name: str) -> EffectSettings:
     """Return a fresh copy of a preset so callers can mutate it freely."""
     return replace(PRESETS.get(name, EffectSettings()))
+
+
+def apply_epic(settings: EffectSettings) -> EffectSettings:
+    """Fold the "epic" macro into the individual settings it stands for.
+
+    Returns a copy with epic set to 0, so the result can be used (and passed
+    through this function again) like any other settings. The macro stacks on
+    the user's own values: speed and pitch drop further, bass, brightness and
+    stereo width are added to, and the reverb, punch, chorus and fades are raised
+    to at least the epic level but never lowered. Loudness is left alone; the
+    punch stage already makes the result dense.
+    """
+    amount = max(0.0, min(settings.epic, 1.0))
+    if amount <= 1e-3:
+        return replace(settings, epic=0.0) if settings.epic else settings
+    return replace(
+        settings,
+        epic=0.0,
+        speed=settings.speed * (1.0 - 0.12 * amount),
+        pitch_semitones=settings.pitch_semitones - 1.5 * amount,
+        bass_boost_db=settings.bass_boost_db + 6.0 * amount,
+        reverb=max(settings.reverb, 0.85 * amount),
+        stereo_width=settings.stereo_width + 0.5 * amount,
+        punch=max(settings.punch, 0.55 * amount),
+        brightness_db=settings.brightness_db + 2.0 * amount,
+        chorus=max(settings.chorus, 0.2 * amount),
+        fade_in_sec=max(settings.fade_in_sec, 2.0 * amount),
+        fade_out_sec=max(settings.fade_out_sec, 3.0 * amount),
+    )
 
 
 def settings_to_dict(settings: EffectSettings) -> dict[str, Any]:
@@ -171,6 +206,7 @@ def _build_stages(
     settings: EffectSettings, sample_rate: int, output_duration: float = 0.0
 ) -> _Stages:
     """Translate settings into the three ordered filter stages."""
+    settings = apply_epic(settings)
     pre: list[str] = []
 
     if settings.reverse:
@@ -259,6 +295,7 @@ def build_filters(
     in seconds. It is only needed to place a fade-out; without it the fade-out
     is skipped rather than guessed wrong.
     """
+    settings = apply_epic(settings)
     stages = _build_stages(settings, sample_rate, output_duration)
     middle = [_build_reverb(settings.reverb)] if settings.reverb > 1e-3 else []
     return stages.pre + middle + stages.post + stages.master
@@ -480,6 +517,7 @@ def build_plan(
     reverb falls back to aecho. output_duration is passed through so a fade-out
     can be positioned.
     """
+    settings = apply_epic(settings)
     texture_paths = texture_paths or {}
 
     active = [
